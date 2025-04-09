@@ -13,6 +13,42 @@ const PORT = process.env.PORT || 5000;
 connectDB()
   .then(() => {
     console.log("MongoDB connected successfully");
+
+    // Xóa index cũ studentId_1 nếu tồn tại
+    try {
+      mongoose.connection
+        .collection("students")
+        .dropIndex("studentId_1")
+        .then(() => {
+          console.log("Old index 'studentId_1' dropped successfully");
+        })
+        .catch((err) => {
+          // Bỏ qua lỗi nếu index không tồn tại
+          if (err.code !== 27) {
+            console.error("Error dropping old index:", err);
+          } else {
+            console.log("No old index to drop");
+          }
+        });
+
+      // Xóa index student_1_date_1 trong bảng attendances
+      mongoose.connection
+        .collection("attendances")
+        .dropIndex("student_1_date_1")
+        .then(() => {
+          console.log("Old index 'student_1_date_1' dropped successfully");
+        })
+        .catch((err) => {
+          // Bỏ qua lỗi nếu index không tồn tại
+          if (err.code !== 27) {
+            console.error("Error dropping attendance index:", err);
+          } else {
+            console.log("No attendance index to drop");
+          }
+        });
+    } catch (error) {
+      console.log("Could not attempt to drop index:", error.message);
+    }
   })
   .catch((error) => {
     console.error("MongoDB connection error:", error);
@@ -256,13 +292,36 @@ app.get("/api/classes/:id", async (req, res) => {
 // CREATE new class
 app.post("/api/classes", async (req, res) => {
   try {
-    const { name, description } = req.body;
-    console.log("Creating new class:", { name, description });
+    const { name, description, startDate, totalSessions } = req.body;
+    console.log("Creating new class:", {
+      name,
+      description,
+      startDate,
+      totalSessions,
+    });
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       console.log("Invalid class name:", name);
       return res.status(400).json({
         message: "Tên lớp học không hợp lệ hoặc bị bỏ trống",
+      });
+    }
+
+    if (!startDate || isNaN(new Date(startDate).getTime())) {
+      console.log("Invalid start date:", startDate);
+      return res.status(400).json({
+        message: "Ngày bắt đầu không hợp lệ hoặc bị bỏ trống",
+      });
+    }
+
+    if (
+      !totalSessions ||
+      isNaN(parseInt(totalSessions)) ||
+      parseInt(totalSessions) <= 0
+    ) {
+      console.log("Invalid total sessions:", totalSessions);
+      return res.status(400).json({
+        message: "Số buổi học không hợp lệ hoặc bị bỏ trống",
       });
     }
 
@@ -278,6 +337,8 @@ app.post("/api/classes", async (req, res) => {
     const newClass = new Class({
       name: name.trim(),
       description: description ? description.trim() : "",
+      startDate: new Date(startDate),
+      totalSessions: parseInt(totalSessions),
       studentCount: 0,
       students: [],
     });
@@ -349,7 +410,7 @@ app.delete("/api/classes/:id", async (req, res) => {
 
 // ==================== STUDENT ROUTES ====================
 
-// GET students by class ID
+// GET students by class ID - This must come BEFORE the generic /api/students/:id route
 app.get("/api/students/class/:classId", async (req, res) => {
   try {
     const { classId } = req.params;
@@ -385,7 +446,42 @@ app.get("/api/students/class/:classId", async (req, res) => {
   }
 });
 
-// GET student by ID
+// DELETE student from class - This must come BEFORE the generic /api/students/:id route
+app.delete("/api/students/delete/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`Attempting to delete student with ID: ${id}`);
+
+    // Find the student to get their class ID
+    const student = await Student.findById(id);
+    if (!student) {
+      console.log(`Student with ID ${id} not found`);
+      return res.status(404).json({ message: "Không tìm thấy sinh viên" });
+    }
+
+    const classId = student.class;
+    console.log(`Student belongs to class: ${classId}`);
+
+    // Delete the student
+    await Student.findByIdAndDelete(id);
+    console.log(`Student with ID ${id} deleted successfully`);
+
+    // Update the class to remove the student reference
+    await Class.findByIdAndUpdate(
+      classId,
+      { $pull: { students: id } },
+      { new: true }
+    );
+    console.log(`Student removed from class ${classId}`);
+
+    res.json({ message: "Đã xóa sinh viên thành công" });
+  } catch (error) {
+    console.error("Error deleting student:", error);
+    res.status(500).json({ message: "Lỗi khi xóa sinh viên" });
+  }
+});
+
+// GET student by ID - This should come AFTER more specific routes
 app.get("/api/students/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -395,21 +491,19 @@ app.get("/api/students/:id", async (req, res) => {
       console.log("Invalid student ID format:", id);
       return res.status(400).json({
         message: "ID sinh viên không hợp lệ",
-        id,
+        id: id,
       });
     }
 
-    const student = await Student.findById(id).populate("class");
-
+    const student = await Student.findById(id);
     if (!student) {
       console.log("Student not found:", id);
       return res.status(404).json({
         message: "Không tìm thấy sinh viên",
-        id,
+        id: id,
       });
     }
 
-    console.log("Found student:", student);
     res.json(student);
   } catch (error) {
     console.error("Error fetching student:", error);
@@ -460,12 +554,16 @@ app.post("/api/students", async (req, res) => {
       });
     }
 
-    // Check if student with same ID already exists
-    const existingStudent = await Student.findOne({ studentId });
+    // Check if student with same ID already exists in the same class
+    const existingStudent = await Student.findOne({
+      studentId,
+      class: classId,
+    });
+
     if (existingStudent) {
-      console.log("Student ID already exists:", studentId);
+      console.log("Student ID already exists in this class:", studentId);
       return res.status(400).json({
-        message: "MSSV đã tồn tại",
+        message: "MSSV đã tồn tại trong lớp này",
       });
     }
 
@@ -714,6 +812,408 @@ app.delete("/api/attendance/:id", async (req, res) => {
       message: "Lỗi khi xóa điểm danh",
       error: error.message,
     });
+  }
+});
+
+// Tạo lịch học tự động
+app.post("/api/classes/:id/schedule", async (req, res) => {
+  try {
+    const classDoc = await Class.findById(req.params.id);
+    if (!classDoc) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    await classDoc.generateSchedule();
+    res.json(classDoc);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Lấy lịch học của lớp
+app.get("/api/classes/:id/schedule", async (req, res) => {
+  try {
+    const classDoc = await Class.findById(req.params.id);
+    if (!classDoc) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    res.json(classDoc.schedule);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET attendance by class ID with optional date range filtering
+app.get("/api/attendance/class/:classId", async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    console.log("Fetching attendance by class:", {
+      classId,
+      startDate,
+      endDate,
+    });
+
+    if (!isValidObjectId(classId)) {
+      console.log("Invalid classId format:", classId);
+      return res.status(400).json({
+        message: "ID lớp học không hợp lệ",
+        classId,
+      });
+    }
+
+    const query = { class: classId };
+
+    // Add date filter if provided
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      query.date = {
+        $gte: start,
+        $lte: end,
+      };
+    }
+
+    // Lấy tất cả bản ghi điểm danh và populate đầy đủ thông tin sinh viên
+    const attendanceRecords = await Attendance.find(query)
+      .populate("students.student")
+      .sort({ date: -1, sessionNumber: -1 });
+
+    // Thêm thời gian ghi nhận cho mỗi sinh viên nếu chưa có
+    const processedRecords = attendanceRecords.map((record) => {
+      // Chuyển đổi Document sang plain object để có thể chỉnh sửa
+      const plainRecord = record.toObject();
+
+      // Đảm bảo mỗi sinh viên có thông tin thời gian
+      if (plainRecord.students && Array.isArray(plainRecord.students)) {
+        plainRecord.students = plainRecord.students.map((student) => {
+          // Nếu không có timestamp, sử dụng thời gian của buổi học
+          if (!student.timestamp) {
+            student.timestamp = plainRecord.createdAt || plainRecord.date;
+          }
+          return student;
+        });
+      }
+
+      return plainRecord;
+    });
+
+    console.log(
+      `Found ${processedRecords.length} attendance records for class ${classId}`
+    );
+    res.json(processedRecords);
+  } catch (error) {
+    console.error("Error fetching attendance by class:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải dữ liệu điểm danh theo lớp",
+      error: error.message,
+    });
+  }
+});
+
+// GET attendance history by class ID and date range
+app.get("/api/attendance/history", async (req, res) => {
+  try {
+    const { classId, startDate, endDate } = req.query;
+    console.log("Fetching attendance history:", {
+      classId,
+      startDate,
+      endDate,
+    });
+
+    if (!classId) {
+      return res.status(400).json({
+        message: "Thiếu thông tin lớp học",
+        classId,
+      });
+    }
+
+    if (!isValidObjectId(classId)) {
+      console.log("Invalid classId format:", classId);
+      return res.status(400).json({
+        message: "ID lớp học không hợp lệ",
+        classId,
+      });
+    }
+
+    const query = { class: classId };
+
+    // Add date filter if provided
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      query.date = {
+        $gte: start,
+        $lte: end,
+      };
+    }
+
+    const attendanceRecords = await Attendance.find(query)
+      .populate("students.student")
+      .sort({ date: -1, sessionNumber: -1 });
+
+    console.log(
+      `Found ${attendanceRecords.length} attendance records for class ${classId}`
+    );
+    res.json(attendanceRecords);
+  } catch (error) {
+    console.error("Error fetching attendance history:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải lịch sử điểm danh",
+      error: error.message,
+    });
+  }
+});
+
+// Bắt đầu điểm danh cho một buổi học
+app.post("/api/attendance/start", async (req, res) => {
+  try {
+    const { classId, sessionNumber } = req.body;
+    console.log(
+      "Starting attendance for class:",
+      classId,
+      "session:",
+      sessionNumber
+    );
+
+    if (!classId || !sessionNumber) {
+      return res.status(400).json({
+        message: "Thiếu thông tin lớp học hoặc số buổi học",
+        classId,
+        sessionNumber,
+      });
+    }
+
+    const classDoc = await Class.findById(classId);
+    if (!classDoc) {
+      console.log("Class not found:", classId);
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra xem đã có bản ghi điểm danh cho buổi học này chưa
+    const existingAttendance = await Attendance.findOne({
+      class: classId,
+      sessionNumber: sessionNumber,
+    });
+
+    if (existingAttendance) {
+      console.log(
+        "Attendance already exists for this session:",
+        existingAttendance._id
+      );
+      // Thay vì trả về lỗi, trả về bản ghi điểm danh hiện có
+      return res.json(existingAttendance);
+    }
+
+    const session = classDoc.schedule.find(
+      (s) => s.sessionNumber === sessionNumber
+    );
+    if (!session) {
+      console.log("Session not found:", sessionNumber);
+      return res.status(404).json({ message: "Không tìm thấy buổi học" });
+    }
+
+    // Lấy danh sách sinh viên từ lớp học
+    const students = [];
+
+    // Chỉ thêm các sinh viên hợp lệ vào danh sách điểm danh
+    if (classDoc.students && classDoc.students.length > 0) {
+      for (const studentId of classDoc.students) {
+        if (studentId) {
+          // Đảm bảo studentId không null
+          students.push({
+            student: studentId,
+            status: "absent", // Mặc định là vắng
+            score: 0,
+          });
+        }
+      }
+    }
+
+    // Tạo bản ghi điểm danh mới
+    const attendance = new Attendance({
+      class: classId,
+      sessionNumber: sessionNumber,
+      date: session.date,
+      students: students,
+    });
+
+    console.log(`Creating attendance with ${students.length} students`);
+    const savedAttendance = await attendance.save();
+    console.log("Attendance created successfully:", savedAttendance._id);
+    res.json(savedAttendance);
+  } catch (error) {
+    console.error("Error starting attendance:", error);
+    res.status(500).json({
+      message: "Lỗi khi bắt đầu điểm danh",
+      error: error.message,
+    });
+  }
+});
+
+// Cập nhật trạng thái điểm danh của sinh viên
+app.put("/api/attendance/:id/student/:studentId", async (req, res) => {
+  try {
+    const { status } = req.body;
+    const attendance = await Attendance.findById(req.params.id);
+
+    if (!attendance) {
+      return res
+        .status(404)
+        .json({ message: "Không tìm thấy bản ghi điểm danh" });
+    }
+
+    const studentRecord = attendance.students.find(
+      (s) => s.student.toString() === req.params.studentId
+    );
+
+    if (!studentRecord) {
+      return res.status(404).json({ message: "Không tìm thấy sinh viên" });
+    }
+
+    studentRecord.status = status;
+    await attendance.save();
+
+    res.json(attendance);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Kết thúc điểm danh và tính điểm
+app.post("/api/attendance/:id/complete", async (req, res) => {
+  try {
+    const attendance = await Attendance.findById(req.params.id);
+    if (!attendance) {
+      return res
+        .status(404)
+        .json({ message: "Không tìm thấy bản ghi điểm danh" });
+    }
+
+    // Tính điểm và cập nhật trạng thái cấm thi
+    await attendance.calculateScores();
+
+    // Cập nhật trạng thái buổi học trong lịch
+    const classDoc = await Class.findById(attendance.class);
+    const session = classDoc.schedule.find(
+      (s) => s.sessionNumber === attendance.sessionNumber
+    );
+    if (session) {
+      session.status = "completed";
+      await classDoc.save();
+    }
+
+    // Cập nhật trạng thái điểm danh
+    attendance.status = "completed";
+    await attendance.save();
+
+    res.json(attendance);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Lấy thống kê điểm danh của lớp
+app.get("/api/classes/:id/attendance-stats", async (req, res) => {
+  try {
+    const classDoc = await Class.findById(req.params.id).populate({
+      path: "students",
+      select: "name studentId",
+    });
+
+    if (!classDoc) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    const attendances = await Attendance.find({
+      class: req.params.id,
+      status: "completed",
+    });
+
+    // Tính thống kê cho từng sinh viên
+    const stats = {};
+    for (let student of classDoc.students) {
+      stats[student._id] = {
+        _id: student._id,
+        name: student.name,
+        studentId: student.studentId,
+        totalAbsences: 0,
+        totalScore: 0,
+        isBanned: false,
+      };
+    }
+
+    for (let att of attendances) {
+      for (let student of att.students) {
+        const studentId = student.student.toString();
+        if (stats[studentId] && student.status === "absent") {
+          stats[studentId].totalAbsences++;
+          stats[studentId].totalScore += student.score;
+        }
+        if (stats[studentId]) {
+          stats[studentId].isBanned = student.isBanned;
+        }
+      }
+    }
+
+    res.json({
+      class: classDoc,
+      stats: Object.values(stats),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Lấy lịch sử điểm danh của lớp học
+app.get("/api/classes/:id/attendance", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Tìm tất cả các bản ghi điểm danh của lớp học
+    const attendanceRecords = await Attendance.find({ class: id }).populate({
+      path: "students.student",
+      select: "name studentId",
+    });
+
+    if (!attendanceRecords || attendanceRecords.length === 0) {
+      return res.json([]);
+    }
+
+    res.json(attendanceRecords);
+  } catch (error) {
+    console.error("Error fetching attendance history:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add endpoint to check indexes
+app.get("/api/check-indexes", async (req, res) => {
+  try {
+    const studentIndexes = await mongoose.connection
+      .collection("students")
+      .indexes();
+    const attendanceIndexes = await mongoose.connection
+      .collection("attendances")
+      .indexes();
+
+    res.json({
+      studentIndexes,
+      attendanceIndexes,
+    });
+  } catch (error) {
+    console.error("Error checking indexes:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 

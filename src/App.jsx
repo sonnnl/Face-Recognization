@@ -1,10 +1,13 @@
 import React, { useState } from "react";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 import Register from "./components/Register";
 import Attendance from "./components/Attendance";
 import AttendanceList from "./components/AttendanceList";
 import ClassList from "./components/ClassList";
 import StudentList from "./components/StudentList";
+import AttendanceHistory from "./components/AttendanceHistory";
 
 function App() {
   const [activeTab, setActiveTab] = useState("register");
@@ -12,6 +15,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen bg-gray-100">
+        <ToastContainer position="top-right" autoClose={3000} />
         <nav className="bg-white shadow-lg">
           <div className="max-w-7xl mx-auto px-4">
             <div className="flex justify-between h-16">
@@ -67,13 +71,13 @@ function App() {
                     Danh sách sinh viên
                   </Link>
                   <Link
-                    to="/attendance-list"
+                    to="/attendance-history"
                     className={`${
-                      activeTab === "attendance-list"
+                      activeTab === "attendance-history"
                         ? "border-blue-500 text-gray-900"
                         : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
                     } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
-                    onClick={() => setActiveTab("attendance-list")}
+                    onClick={() => setActiveTab("attendance-history")}
                   >
                     Lịch sử điểm danh
                   </Link>
@@ -90,6 +94,7 @@ function App() {
             <Route path="/classes" element={<ClassList />} />
             <Route path="/students" element={<StudentList />} />
             <Route path="/attendance-list" element={<AttendanceList />} />
+            <Route path="/attendance-history" element={<AttendanceHistory />} />
             <Route path="/" element={<Register />} />
           </Routes>
         </main>

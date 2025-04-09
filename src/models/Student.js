@@ -8,7 +8,6 @@ const studentSchema = new mongoose.Schema({
   studentId: {
     type: String,
     required: true,
-    unique: true,
   },
   class: {
     type: mongoose.Schema.Types.ObjectId,
@@ -36,9 +35,10 @@ const studentSchema = new mongoose.Schema({
   },
 });
 
-// Tạo index cho class và studentId để tìm kiếm nhanh hơn
+// Bỏ index đơn cho studentId và thay bằng compound index
 studentSchema.index({ class: 1 });
-studentSchema.index({ studentId: 1 });
+// Tạo compound index để đảm bảo mỗi studentId là duy nhất trong một lớp
+studentSchema.index({ studentId: 1, class: 1 }, { unique: true });
 
 const Student = mongoose.model("Student", studentSchema);
 
