@@ -1,0 +1,938 @@
+# LOGIC CHỨC NĂNG HỆ THỐNG ĐIỂM DANH BẰNG NHẬN DIỆN KHUÔN MẶT
+
+## 1. AUTHENTICATION (XÁC THỰC)
+
+### 1.1. Mô hình Account (src/models/Account.js)
+```javascript
+// Định nghĩa schema Account
+const accountSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+  password: { type: String, required: true, minlength: 6 },
+  googleId: { type: String, sparse: true, unique: true },
+  role: { type: String, enum: ["teacher", "admin"], default: "teacher" },
+  status: { type: String, enum: ["active", "inactive", "pending", "blocked"], default: "active" }
+});
+
+// Mã hóa mật khẩu trước khi lưu
+accountSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Phương thức kiểm tra mật khẩu
+accountSchema.methods.comparePassword = async function (candidatePassword) {
+  return bcrypt.compare(candidatePassword, this.password);
+};
+```
+
+### 1.2. Context xác thực (src/contexts/AuthContext.jsx)
+```javascript
+// Tạo context cho Authentication
+export const AuthContext = createContext();
+
+export function AuthProvider({ children }) {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Check token khi khởi động
+  useEffect(() => {
+    const checkLoggedIn = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        // Set token vào header axios
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        try {
+          const response = await axios.get('/api/account/me');
+          setCurrentUser(response.data);
+        } catch (error) {
+          localStorage.removeItem('token');
+          delete axios.defaults.headers.common['Authorization'];
+        }
+      }
+      setLoading(false);
+    };
+    checkLoggedIn();
+  }, []);
+
+  // Phương thức đăng nhập
+  const login = async (email, password) => {
+    try {
+      const response = await axios.post('/api/auth/login', { email, password });
+      localStorage.setItem('token', response.data.token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${response.data.token}`;
+      setCurrentUser(response.data.user);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  // Phương thức đăng xuất
+  const logout = async () => {
+    localStorage.removeItem('token');
+    delete axios.defaults.headers.common['Authorization'];
+    setCurrentUser(null);
+  };
+}
+```
+
+### 1.3. API Endpoint đăng nhập (server/index.js)
+```javascript
+// Login API
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const account = await Account.findOne({ email });
+    
+    if (!account) {
+      return res.status(401).json({ message: "Email hoặc mật khẩu không đúng" });
+    }
+    
+    // Kiểm tra mật khẩu
+    const isMatch = await account.comparePassword(password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Email hoặc mật khẩu không đúng" });
+    }
+    
+    // Tạo JWT token
+    const token = jwt.sign(
+      { id: account._id, role: account.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    // Cập nhật lastLogin
+    account.lastLogin = new Date();
+    await account.save();
+    
+    res.json({ token, user: account });
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi đăng nhập", error: error.message });
+  }
+});
+```
+
+## 2. QUẢN LÝ LỚP HỌC
+
+### 2.1. Mô hình Class (src/models/Class.js)
+```javascript
+const classSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, unique: true },
+  description: { type: String, trim: true },
+  teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true },
+  startDate: { type: Date, required: true },
+  totalSessions: { type: Number, required: true, min: 1 },
+  maxAbsences: { type: Number, default: 0 },
+  studentCount: { type: Number, default: 0 },
+  students: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Student' }],
+  updatedAt: { type: Date, default: Date.now }
+});
+```
+
+### 2.2. API Tạo lớp học mới
+```javascript
+app.post("/api/classes", auth, async (req, res) => {
+  try {
+    const { name, description, startDate, totalSessions } = req.body;
+    
+    // Kiểm tra dữ liệu đầu vào
+    if (!name || !startDate || !totalSessions) {
+      return res.status(400).json({
+        message: "Vui lòng cung cấp đầy đủ thông tin lớp học"
+      });
+    }
+    
+    // Tạo lớp học mới
+    const newClass = new Class({
+      name: name.trim(),
+      description: description ? description.trim() : "",
+      teacher: req.account._id,
+      startDate: new Date(startDate),
+      totalSessions: parseInt(totalSessions),
+      maxAbsences: Math.ceil(parseInt(totalSessions) * 0.2), // 20% số buổi học
+      studentCount: 0,
+      students: []
+    });
+    
+    const savedClass = await newClass.save();
+    res.status(201).json(savedClass);
+  } catch (error) {
+    res.status(500).json({
+      message: "Lỗi khi tạo lớp học mới",
+      error: error.message
+    });
+  }
+});
+```
+
+### 2.3. Component ClassList (src/components/ClassList.jsx)
+```javascript
+const ClassList = () => {
+  const [classes, setClasses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  // Fetch classes
+  useEffect(() => {
+    const fetchClasses = async () => {
+      try {
+        setLoading(true);
+        const response = await axios.get('/api/classes');
+        setClasses(response.data);
+      } catch (error) {
+        toast.error("Không thể tải danh sách lớp học");
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchClasses();
+  }, []);
+  
+  // Create new class
+  const createClass = async (formData) => {
+    try {
+      const response = await axios.post('/api/classes', formData);
+      setClasses([...classes, response.data]);
+      toast.success("Tạo lớp học mới thành công");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Không thể tạo lớp học");
+    }
+  };
+}
+```
+
+## 3. ĐĂNG KÝ SINH VIÊN
+
+### 3.1. Mô hình Student (src/models/Student.js)
+```javascript
+const studentSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  studentId: { type: String, required: true, unique: true, trim: true },
+  classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
+  faceImage: { type: String },
+  faceFeatures: { type: Object },
+  registeredAt: { type: Date, default: Date.now },
+  status: { type: String, enum: ['active', 'inactive'], default: 'active' }
+});
+```
+
+### 3.2. API Đăng ký sinh viên
+```javascript
+app.post("/api/students", auth, async (req, res) => {
+  try {
+    const { name, studentId, classId, faceImage, faceFeatures } = req.body;
+    
+    // Kiểm tra dữ liệu
+    if (!name || !studentId || !classId || !faceImage || !faceFeatures) {
+      return res.status(400).json({ message: "Thiếu thông tin sinh viên" });
+    }
+    
+    // Kiểm tra lớp học
+    const classExists = await Class.findById(classId);
+    if (!classExists) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+    
+    // Kiểm tra quyền
+    if (req.account.role !== "admin" && 
+        classExists.teacher.toString() !== req.account._id.toString()) {
+      return res.status(403).json({ message: "Không có quyền thực hiện" });
+    }
+    
+    // Kiểm tra trùng mã số sinh viên
+    const existingStudent = await Student.findOne({ studentId: studentId.trim() });
+    if (existingStudent) {
+      return res.status(400).json({ message: "Mã số sinh viên đã tồn tại" });
+    }
+    
+    // Tạo sinh viên mới
+    const newStudent = new Student({
+      name: name.trim(),
+      studentId: studentId.trim(),
+      classId,
+      faceImage,
+      faceFeatures
+    });
+    
+    // Lưu sinh viên và cập nhật lớp học
+    const savedStudent = await newStudent.save();
+    await Class.findByIdAndUpdate(classId, {
+      $push: { students: savedStudent._id },
+      $inc: { studentCount: 1 }
+    });
+    
+    res.status(201).json(savedStudent);
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi đăng ký sinh viên", error: error.message });
+  }
+});
+```
+
+### 3.3. Component Register (src/components/Register.jsx)
+```javascript
+const Register = () => {
+  const [classes, setClasses] = useState([]);
+  const [selectedClass, setSelectedClass] = useState("");
+  const [formData, setFormData] = useState({
+    name: "",
+    studentId: "",
+  });
+  const [faceImage, setFaceImage] = useState(null);
+  const [faceFeatures, setFaceFeatures] = useState(null);
+  
+  // Load face-api models khi component mount
+  useEffect(() => {
+    const loadModels = async () => {
+      const MODEL_URL = "/models";
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        ]);
+        setModelsLoaded(true);
+      } catch (error) {
+        setError("Không thể tải các mô hình nhận diện khuôn mặt");
+      }
+    };
+    
+    loadModels();
+  }, []);
+  
+  // Xử lý chụp khuôn mặt
+  const handleCaptureFace = async () => {
+    if (!videoRef.current) return;
+    
+    try {
+      const detections = await faceapi.detectSingleFace(
+        videoRef.current, 
+        new faceapi.TinyFaceDetectorOptions()
+      )
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+      
+      if (!detections) {
+        setError("Không phát hiện khuôn mặt. Vui lòng thử lại");
+        return;
+      }
+      
+      // Lấy ảnh khuôn mặt
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(videoRef.current, 0, 0);
+      
+      // Chuyển ảnh sang base64
+      const imageData = canvas.toDataURL('image/jpeg');
+      setFaceImage(imageData);
+      
+      // Lưu đặc trưng khuôn mặt
+      setFaceFeatures(detections.descriptor);
+      
+      setCapturingFace(false);
+    } catch (error) {
+      setError("Lỗi khi nhận diện khuôn mặt: " + error.message);
+    }
+  };
+  
+  // Đăng ký sinh viên
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    
+    if (!selectedClass || !formData.name || !formData.studentId || !faceImage || !faceFeatures) {
+      setError("Vui lòng điền đầy đủ thông tin và chụp khuôn mặt");
+      return;
+    }
+    
+    try {
+      await axios.post('/api/students', {
+        name: formData.name,
+        studentId: formData.studentId,
+        classId: selectedClass,
+        faceImage,
+        faceFeatures: Array.from(faceFeatures)
+      });
+      
+      toast.success("Đăng ký sinh viên thành công");
+      resetForm();
+    } catch (error) {
+      setError(error.response?.data?.message || "Lỗi khi đăng ký sinh viên");
+    }
+  };
+}
+```
+
+## 4. ĐIỂM DANH TỰ ĐỘNG
+
+### 4.1. Mô hình Attendance (src/models/Attendance.js)
+```javascript
+const attendanceSchema = new mongoose.Schema({
+  classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class', required: true },
+  sessionNumber: { type: Number, required: true },
+  date: { type: Date, default: Date.now },
+  students: [{
+    student: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
+    present: { type: Boolean, default: false },
+    timeRecorded: { type: Date },
+    note: { type: String }
+  }],
+  status: { type: String, enum: ['ongoing', 'completed'], default: 'ongoing' },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true }
+});
+```
+
+### 4.2. API bắt đầu điểm danh
+```javascript
+app.post("/api/attendance/start", auth, async (req, res) => {
+  try {
+    const { classId, sessionNumber } = req.body;
+    
+    // Kiểm tra lớp học
+    const classExists = await Class.findById(classId).populate('students');
+    if (!classExists) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+    
+    // Kiểm tra quyền truy cập
+    if (req.account.role !== "admin" && 
+        classExists.teacher.toString() !== req.account._id.toString()) {
+      return res.status(403).json({ message: "Không có quyền thực hiện" });
+    }
+    
+    // Kiểm tra phiên đã tồn tại
+    const existingSession = await Attendance.findOne({
+      classId,
+      sessionNumber: parseInt(sessionNumber),
+      status: 'ongoing'
+    });
+    
+    if (existingSession) {
+      return res.json(existingSession);
+    }
+    
+    // Tạo phiên điểm danh mới
+    const newAttendance = new Attendance({
+      classId,
+      sessionNumber: parseInt(sessionNumber),
+      date: new Date(),
+      students: classExists.students.map(student => ({
+        student: student._id,
+        present: false
+      })),
+      createdBy: req.account._id
+    });
+    
+    const savedAttendance = await newAttendance.save();
+    res.status(201).json(savedAttendance);
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi bắt đầu điểm danh", error: error.message });
+  }
+});
+```
+
+### 4.3. API ghi nhận điểm danh
+```javascript
+app.post("/api/attendance/mark", auth, async (req, res) => {
+  try {
+    const { attendanceId, studentId, present, note } = req.body;
+    
+    const attendance = await Attendance.findById(attendanceId);
+    if (!attendance) {
+      return res.status(404).json({ message: "Không tìm thấy phiên điểm danh" });
+    }
+    
+    // Kiểm tra quyền
+    if (req.account.role !== "admin") {
+      const classInfo = await Class.findById(attendance.classId);
+      if (classInfo.teacher.toString() !== req.account._id.toString()) {
+        return res.status(403).json({ message: "Không có quyền điểm danh" });
+      }
+    }
+    
+    // Cập nhật trạng thái điểm danh
+    const studentIndex = attendance.students.findIndex(
+      s => s.student.toString() === studentId
+    );
+    
+    if (studentIndex === -1) {
+      return res.status(404).json({ message: "Không tìm thấy sinh viên trong phiên điểm danh" });
+    }
+    
+    attendance.students[studentIndex].present = present;
+    attendance.students[studentIndex].timeRecorded = new Date();
+    if (note) attendance.students[studentIndex].note = note;
+    
+    const updatedAttendance = await attendance.save();
+    
+    res.json({
+      message: "Đã cập nhật điểm danh",
+      student: updatedAttendance.students[studentIndex]
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi điểm danh", error: error.message });
+  }
+});
+```
+
+### 4.4. Component Attendance (src/components/Attendance.jsx)
+```javascript
+const Attendance = () => {
+  const [classes, setClasses] = useState([]);
+  const [selectedClass, setSelectedClass] = useState("");
+  const [students, setStudents] = useState([]);
+  const [currentAttendance, setCurrentAttendance] = useState(null);
+  const [isRecognizing, setIsRecognizing] = useState(false);
+
+  // Xử lý nhận diện khuôn mặt
+  const detectSingleFace = async () => {
+    if (!videoRef.current || !modelsLoaded) return;
+    
+    try {
+      setIsRecognizing(true);
+      setError("");
+      
+      // Kiểm tra khuôn mặt
+      const detections = await faceapi.detectSingleFace(
+        videoRef.current,
+        new faceapi.TinyFaceDetectorOptions()
+      )
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+      
+      if (!detections) {
+        setError("Không phát hiện khuôn mặt. Vui lòng thử lại");
+        setIsRecognizing(false);
+        return;
+      }
+      
+      // So sánh với khuôn mặt đã đăng ký
+      let bestMatch = null;
+      let bestMatchDistance = 1.0; // Threshold mặc định
+      
+      for (const student of students) {
+        if (!student.faceFeatures) continue;
+        
+        // Chuyển đổi mảng thành Float32Array
+        const faceFeatures = new Float32Array(Object.values(student.faceFeatures));
+        
+        // Tính khoảng cách Euclidean
+        const distance = faceapi.euclideanDistance(detections.descriptor, faceFeatures);
+        
+        // Nếu khoảng cách nhỏ hơn threshold và nhỏ hơn khoảng cách hiện tại
+        if (distance < 0.6 && distance < bestMatchDistance) {
+          bestMatch = student;
+          bestMatchDistance = distance;
+        }
+      }
+      
+      if (bestMatch) {
+        setRecognizedStudent(bestMatch);
+        
+        // Đánh dấu điểm danh
+        if (currentAttendance) {
+          await markAttendance(bestMatch._id, true);
+        }
+      } else {
+        setError("Không nhận diện được sinh viên. Vui lòng thử lại hoặc đăng ký khuôn mặt.");
+      }
+    } catch (error) {
+      setError("Lỗi khi nhận diện khuôn mặt: " + error.message);
+    } finally {
+      setIsRecognizing(false);
+    }
+  };
+
+  // Đánh dấu điểm danh
+  const markAttendance = async (studentId, present) => {
+    try {
+      await axios.post("/api/attendance/mark", {
+        attendanceId: currentAttendance._id,
+        studentId,
+        present
+      });
+      
+      // Cập nhật UI
+      setStudents(students.map(student => {
+        if (student._id === studentId) {
+          return {
+            ...student,
+            attendanceStatus: present ? "present" : "absent"
+          };
+        }
+        return student;
+      }));
+      
+      toast.success(`Đã điểm danh thành công cho ${students.find(s => s._id === studentId)?.name}`);
+    } catch (error) {
+      toast.error("Lỗi khi điểm danh: " + error.response?.data?.message || error.message);
+    }
+  };
+}
+```
+
+## 5. LỊCH SỬ ĐIỂM DANH
+
+### 5.1. API lấy lịch sử điểm danh
+```javascript
+app.get("/api/attendance/history/:classId", auth, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { startDate, endDate } = req.query;
+    
+    // Kiểm tra lớp học
+    const classExists = await Class.findById(classId);
+    if (!classExists) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+    
+    // Kiểm tra quyền
+    if (req.account.role !== "admin" && 
+        classExists.teacher.toString() !== req.account._id.toString()) {
+      return res.status(403).json({ message: "Không có quyền truy cập" });
+    }
+    
+    // Xây dựng query
+    const query = { classId };
+    
+    if (startDate && endDate) {
+      query.date = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+    
+    // Lấy lịch sử điểm danh
+    const attendanceHistory = await Attendance.find(query)
+      .populate({
+        path: 'students.student',
+        select: 'name studentId'
+      })
+      .sort({ date: -1 });
+    
+    res.json(attendanceHistory);
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi tải lịch sử điểm danh", error: error.message });
+  }
+});
+```
+
+### 5.2. API xuất dữ liệu điểm danh
+```javascript
+app.get("/api/attendance/export/:classId", auth, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    
+    // Kiểm tra lớp học và quyền truy cập
+    const classData = await Class.findById(classId).populate('students');
+    if (!classData) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+    
+    if (req.account.role !== "admin" && 
+        classData.teacher.toString() !== req.account._id.toString()) {
+      return res.status(403).json({ message: "Không có quyền truy cập" });
+    }
+    
+    // Lấy tất cả dữ liệu điểm danh của lớp
+    const attendanceRecords = await Attendance.find({ classId })
+      .populate({
+        path: 'students.student',
+        select: 'name studentId'
+      })
+      .sort({ sessionNumber: 1 });
+    
+    // Tạo workbook Excel
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Attendance');
+    
+    // Thêm header
+    worksheet.addRow(['STT', 'Mã SV', 'Họ và tên', ...attendanceRecords.map(r => `Buổi ${r.sessionNumber}`)]);
+    
+    // Thêm data
+    classData.students.forEach((student, index) => {
+      const studentData = [
+        index + 1,
+        student.studentId,
+        student.name
+      ];
+      
+      // Thêm trạng thái điểm danh cho từng buổi
+      attendanceRecords.forEach(record => {
+        const studentAttendance = record.students.find(
+          s => s.student._id.toString() === student._id.toString()
+        );
+        
+        studentData.push(studentAttendance?.present ? "Có mặt" : "Vắng");
+      });
+      
+      worksheet.addRow(studentData);
+    });
+    
+    // Gửi file Excel
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance_${classData.name}.xlsx"`);
+    
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi xuất dữ liệu điểm danh", error: error.message });
+  }
+});
+```
+
+### 5.3. Component AttendanceHistory (src/components/AttendanceHistory.jsx)
+```javascript
+const AttendanceHistory = () => {
+  const [classes, setClasses] = useState([]);
+  const [selectedClass, setSelectedClass] = useState("");
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
+  const [dateRange, setDateRange] = useState({
+    startDate: "",
+    endDate: ""
+  });
+  
+  // Fetch lịch sử điểm danh
+  const fetchAttendanceHistory = async () => {
+    if (!selectedClass) {
+      toast.error("Vui lòng chọn lớp học");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      let url = `/api/attendance/history/${selectedClass}`;
+      
+      // Thêm filter date nếu có
+      if (dateRange.startDate && dateRange.endDate) {
+        url += `?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`;
+      }
+      
+      const response = await axios.get(url);
+      setAttendanceRecords(response.data);
+    } catch (error) {
+      toast.error("Không thể tải lịch sử điểm danh");
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Export Excel
+  const exportToExcel = async () => {
+    if (!selectedClass) {
+      toast.error("Vui lòng chọn lớp học");
+      return;
+    }
+    
+    try {
+      setExporting(true);
+      const response = await axios.get(`/api/attendance/export/${selectedClass}`, {
+        responseType: 'blob'
+      });
+      
+      // Tạo URL để download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `attendance_export.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      
+      toast.success("Xuất dữ liệu điểm danh thành công");
+    } catch (error) {
+      toast.error("Không thể xuất dữ liệu điểm danh");
+    } finally {
+      setExporting(false);
+    }
+  };
+}
+```
+
+## 6. QUẢN LÝ TÀI KHOẢN (ADMIN)
+
+### 6.1. API lấy danh sách tài khoản
+```javascript
+app.get("/api/admin/teachers", auth, adminOnly, async (req, res) => {
+  try {
+    const teachers = await Account.find({}).select("-password");
+    res.json(teachers);
+  } catch (error) {
+    res.status(500).json({
+      message: "Lỗi khi tải danh sách giáo viên",
+      error: error.message
+    });
+  }
+});
+```
+
+### 6.2. API tạo tài khoản mới
+```javascript
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    
+    // Kiểm tra email đã tồn tại chưa
+    const existingAccount = await Account.findOne({ email: email.toLowerCase() });
+    if (existingAccount) {
+      return res.status(400).json({ message: "Email đã được sử dụng" });
+    }
+    
+    // Tạo tài khoản mới
+    const newAccount = new Account({
+      name,
+      email: email.toLowerCase(),
+      password,
+      role: role || "teacher"
+    });
+    
+    await newAccount.save();
+    
+    // Tạo token
+    const token = jwt.sign(
+      { id: newAccount._id, role: newAccount.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    // Trả về thông tin không bao gồm password
+    const accountData = newAccount.toJSON();
+    
+    res.status(201).json({
+      message: "Đăng ký tài khoản thành công",
+      token,
+      user: accountData
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Lỗi khi đăng ký tài khoản", error: error.message });
+  }
+});
+```
+
+### 6.3. Component AccountManagement (src/components/admin/AccountManagement.jsx)
+```javascript
+const AccountManagement = () => {
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [currentAccount, setCurrentAccount] = useState(null);
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    role: "teacher"
+  });
+  
+  // Fetch tài khoản
+  useEffect(() => {
+    const fetchAccounts = async () => {
+      try {
+        setLoading(true);
+        const response = await axios.get("/api/admin/teachers");
+        setAccounts(response.data);
+      } catch (error) {
+        toast.error("Không thể tải danh sách tài khoản");
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchAccounts();
+  }, []);
+  
+  // Cập nhật tài khoản
+  const handleUpdateAccount = async (e) => {
+    e.preventDefault();
+    
+    try {
+      if (!formData.name || !formData.email) {
+        toast.error("Vui lòng điền đầy đủ thông tin");
+        return;
+      }
+      
+      const response = await axios.put(`/api/admin/teachers/${currentAccount._id}`, formData);
+      
+      // Cập nhật state
+      setAccounts(accounts.map(account => 
+        account._id === currentAccount._id ? response.data.teacher : account
+      ));
+      
+      setShowEditModal(false);
+      toast.success("Cập nhật tài khoản thành công");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Lỗi khi cập nhật tài khoản");
+    }
+  };
+  
+  // Xóa tài khoản
+  const handleDeleteAccount = async (accountId) => {
+    try {
+      await axios.delete(`/api/admin/teachers/${accountId}`);
+      
+      // Cập nhật state
+      setAccounts(accounts.filter(account => account._id !== accountId));
+      toast.success("Xóa tài khoản thành công");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Lỗi khi xóa tài khoản");
+    }
+  };
+}
+```
+
+## 7. MIDDLEWARE XÁC THỰC & PHÂN QUYỀN (server/index.js)
+
+```javascript
+// Middleware xác thực JWT
+const auth = async (req, res, next) => {
+  try {
+    // Lấy token từ header
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ message: "Không tìm thấy token xác thực" });
+    }
+    
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Kiểm tra tài khoản
+    const account = await Account.findById(decoded.id);
+    if (!account) {
+      return res.status(401).json({ message: "Tài khoản không tồn tại" });
+    }
+    
+    // Kiểm tra trạng thái tài khoản
+    if (account.status !== "active") {
+      return res.status(401).json({ message: "Tài khoản đã bị khóa hoặc chưa kích hoạt" });
+    }
+    
+    // Gắn thông tin tài khoản vào request
+    req.account = account;
+    next();
+  } catch (error) {
+    if (error.name === "JsonWebTokenError") {
+      return res.status(401).json({ message: "Token không hợp lệ" });
+    }
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({ message: "Token đã hết hạn" });
+    }
+    
+    res.status(500).json({ message: "Lỗi xác thực", error: error.message });
+  }
+};
+
+// Middleware phân quyền admin
+const adminOnly = (req, res, next) => {
+  if (req.account.role !== "admin") {
+    return res.status(403).json({ message: "Bạn không có quyền truy cập tính năng này" });
+  }
+  next();
+};
+``` 
