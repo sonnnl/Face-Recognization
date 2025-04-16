@@ -10,6 +10,11 @@ const classSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
+  teacher: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Teacher",
+    required: true,
+  },
   startDate: {
     type: Date,
     required: true,

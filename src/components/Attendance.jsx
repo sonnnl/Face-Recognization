@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import axios from "axios";
+import axios from "../config/axios";
 import * as faceapi from "face-api.js";
 
 const Attendance = () => {
@@ -16,6 +16,10 @@ const Attendance = () => {
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [attendanceStats, setAttendanceStats] = useState(null);
   const [showStats, setShowStats] = useState(false);
+  const [dateRange, setDateRange] = useState({
+    startDate: "",
+    endDate: "",
+  });
 
   const videoRef = useRef();
   const streamRef = useRef();
@@ -91,21 +95,40 @@ const Attendance = () => {
   };
 
   const fetchAttendanceStats = async () => {
-    if (!selectedClass) return;
+    if (!selectedClass) {
+      setError("Vui lòng chọn lớp học");
+      return;
+    }
+
+    // Only show the date validation error when explicitly trying to fetch data
+    if (!dateRange.startDate || !dateRange.endDate) {
+      setError("Vui lòng chọn khoảng thời gian để xem thống kê");
+      return;
+    }
 
     try {
       setLoading(true);
+      setError(""); // Clear any previous errors
+
+      // Include date range in the request
       const response = await axios.get(
-        `/api/classes/${selectedClass}/attendance-stats`
+        `/api/classes/${selectedClass}/attendance-stats?startDate=${dateRange.startDate}&endDate=${dateRange.endDate}`
       );
       setAttendanceStats(response.data);
-      console.log("Thống kê điểm danh:", response.data);
     } catch (error) {
       console.error("Lỗi khi tải thống kê điểm danh:", error);
       setError("Không thể tải thống kê điểm danh");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDateChange = (e) => {
+    const { name, value } = e.target;
+    setDateRange((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
   };
 
   const startCamera = async () => {
@@ -318,9 +341,7 @@ const Attendance = () => {
 
   const toggleStatsView = () => {
     setShowStats(!showStats);
-    if (!showStats && !attendanceStats) {
-      fetchAttendanceStats();
-    }
+    setError(""); // Clear errors when toggling
   };
 
   return (
@@ -472,61 +493,99 @@ const Attendance = () => {
         </div>
       )}
 
-      {showStats && attendanceStats && (
+      {showStats && (
         <div className="mb-6">
           <h3 className="text-lg font-semibold mb-2">Thống kê điểm danh</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead>
-                <tr>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Họ tên
-                  </th>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    MSSV
-                  </th>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Số buổi vắng
-                  </th>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Điểm trừ
-                  </th>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Trạng thái
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {attendanceStats.stats.map((stat) => (
-                  <tr key={stat._id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {stat.name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {stat.studentId}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {stat.totalAbsences}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {stat.totalScore}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <span
-                        className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          stat.isBanned
-                            ? "bg-red-100 text-red-800"
-                            : "bg-green-100 text-green-800"
-                        }`}
-                      >
-                        {stat.isBanned ? "Cấm thi" : "Đủ điều kiện"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Từ ngày:
+              </label>
+              <input
+                type="date"
+                name="startDate"
+                value={dateRange.startDate}
+                onChange={handleDateChange}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Đến ngày:
+              </label>
+              <input
+                type="date"
+                name="endDate"
+                value={dateRange.endDate}
+                onChange={handleDateChange}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+              />
+            </div>
           </div>
+
+          <button
+            onClick={fetchAttendanceStats}
+            disabled={loading}
+            className="mb-4 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-300"
+          >
+            {loading ? "Đang tải..." : "Trích xuất dữ liệu"}
+          </button>
+
+          {attendanceStats && (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead>
+                  <tr>
+                    <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Họ tên
+                    </th>
+                    <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      MSSV
+                    </th>
+                    <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Số buổi vắng
+                    </th>
+                    <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Điểm trừ
+                    </th>
+                    <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Trạng thái
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {attendanceStats.stats.map((stat) => (
+                    <tr key={stat._id}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {stat.name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {stat.studentId}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {stat.totalAbsences}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {stat.totalScore}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <span
+                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            stat.isBanned
+                              ? "bg-red-100 text-red-800"
+                              : "bg-green-100 text-green-800"
+                          }`}
+                        >
+                          {stat.isBanned ? "Cấm thi" : "Đủ điều kiện"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

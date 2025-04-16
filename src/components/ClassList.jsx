@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from "react";
 import axios from "../config/axios";
+import { useAuth } from "../contexts/AuthContext";
 
 const ClassList = () => {
   const [classes, setClasses] = useState([]);
+  const [teachers, setTeachers] = useState({});
   const [newClassName, setNewClassName] = useState("");
+  const [description, setDescription] = useState("");
   const [startDate, setStartDate] = useState("");
   const [totalSessions, setTotalSessions] = useState("");
   const [error, setError] = useState("");
@@ -19,16 +22,38 @@ const ClassList = () => {
   const [selectedSession, setSelectedSession] = useState(null);
   const [sessionAttendance, setSessionAttendance] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [exportLoading, setExportLoading] = useState(null);
+
+  const { currentUser } = useAuth();
 
   useEffect(() => {
     fetchClasses();
   }, []);
+
+  const fetchTeacherInfo = async (teacherId) => {
+    if (teachers[teacherId]) return teachers[teacherId];
+
+    try {
+      const response = await axios.get(`/api/teachers/${teacherId}`);
+      const teacherData = response.data;
+      setTeachers((prev) => ({ ...prev, [teacherId]: teacherData }));
+      return teacherData;
+    } catch (error) {
+      console.error("Không thể lấy thông tin giáo viên:", error);
+      return { name: "Không xác định" };
+    }
+  };
 
   const fetchClasses = async () => {
     try {
       setLoading(true);
       const response = await axios.get("/api/classes");
       setClasses(response.data);
+
+      const teacherIds = [...new Set(response.data.map((cls) => cls.teacher))];
+      for (const id of teacherIds) {
+        await fetchTeacherInfo(id);
+      }
     } catch (error) {
       setError("Không thể tải danh sách lớp học");
       console.error("Error fetching classes:", error);
@@ -48,15 +73,26 @@ const ClassList = () => {
       setLoading(true);
       const response = await axios.post("/api/classes", {
         name: newClassName,
+        description: description,
         startDate: new Date(startDate),
         totalSessions: parseInt(totalSessions),
       });
 
-      // Tạo lịch học tự động
       await axios.post(`/api/classes/${response.data._id}/schedule`);
+
+      if (response.data.teacher) {
+        setTeachers((prev) => ({
+          ...prev,
+          [response.data.teacher]: {
+            name: currentUser.name,
+            id: currentUser._id,
+          },
+        }));
+      }
 
       setClasses([...classes, response.data]);
       setNewClassName("");
+      setDescription("");
       setStartDate("");
       setTotalSessions("");
       setError("");
@@ -89,29 +125,24 @@ const ClassList = () => {
     try {
       setLoading(true);
 
-      // Lấy thông tin lớp học
       const classResponse = await axios.get(`/api/classes/${classId}`);
       setSelectedClass(classResponse.data);
 
-      // Lấy lịch học
       const scheduleResponse = await axios.get(
         `/api/classes/${classId}/schedule`
       );
       setSchedule(scheduleResponse.data);
 
-      // Lấy thống kê điểm danh
       const statsResponse = await axios.get(
         `/api/classes/${classId}/attendance-stats`
       );
       setStats(statsResponse.data);
 
-      // Lấy lịch sử điểm danh
       const attendanceResponse = await axios.get(
         `/api/classes/${classId}/attendance`
       );
       setAttendanceHistory(attendanceResponse.data);
 
-      // Lấy danh sách sinh viên
       const studentsResponse = await axios.get(
         `/api/students/class/${classId}`
       );
@@ -119,7 +150,7 @@ const ClassList = () => {
 
       setError("");
       setSelectedSession(null);
-      setIsModalOpen(true); // Mở modal
+      setIsModalOpen(true);
     } catch (error) {
       console.error("Error fetching class data:", error);
       setError("Không thể tải thông tin lớp học");
@@ -129,13 +160,11 @@ const ClassList = () => {
   };
 
   const viewSessionAttendance = async (sessionNumber) => {
-    // Tìm bản ghi điểm danh cho buổi học đã chọn
     const attendance = attendanceHistory.find(
       (record) => record.sessionNumber === sessionNumber
     );
 
     if (attendance) {
-      // Tải danh sách sinh viên nếu chưa có
       if ((!students || students.length === 0) && selectedClass) {
         try {
           console.log(`Loading students for class: ${selectedClass._id}`);
@@ -161,15 +190,12 @@ const ClassList = () => {
       setLoading(true);
       console.log(`Fetching students for class: ${classId}`);
 
-      // Lấy thông tin lớp học
       const classResponse = await axios.get(`/api/classes/${classId}`);
       setSelectedClass(classResponse.data);
 
-      // Lấy danh sách sinh viên
       const response = await axios.get(`/api/students/class/${classId}`);
       console.log("Students data:", response.data);
 
-      // Kiểm tra dữ liệu sinh viên
       if (response.data && Array.isArray(response.data)) {
         response.data.forEach((student, index) => {
           console.log(`Student ${index}:`, {
@@ -187,7 +213,7 @@ const ClassList = () => {
       setStudents(response.data);
       setShowStudents(true);
       setSelectedSession(null);
-      setIsModalOpen(true); // Mở modal
+      setIsModalOpen(true);
     } catch (error) {
       setError("Không thể tải danh sách sinh viên");
       console.error("Error fetching students:", error);
@@ -205,7 +231,6 @@ const ClassList = () => {
       setDeletingStudent(studentId);
       console.log(`Attempting to delete student with ID: ${studentId}`);
 
-      // Kiểm tra xem ID có hợp lệ không
       if (
         !studentId ||
         typeof studentId !== "string" ||
@@ -221,7 +246,6 @@ const ClassList = () => {
 
       setStudents(students.filter((student) => student._id !== studentId));
 
-      // Cập nhật lại danh sách lớp học
       fetchClasses();
     } catch (error) {
       console.error("Error deleting student:", error);
@@ -241,100 +265,197 @@ const ClassList = () => {
     }
   };
 
+  const handleExportExcel = async (classId, className) => {
+    try {
+      setExportLoading(classId);
+
+      const response = await axios.get(
+        `/api/classes/${classId}/attendance-export`,
+        { responseType: "blob" }
+      );
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute(
+        "download",
+        `diem-danh-${className.replace(/\s+/g, "_")}.xlsx`
+      );
+      document.body.appendChild(link);
+      link.click();
+
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setExportLoading(null);
+
+      setError("");
+    } catch (error) {
+      console.error("Lỗi khi xuất báo cáo:", error);
+      setError("Không thể xuất báo cáo Excel. Vui lòng thử lại sau.");
+      setExportLoading(null);
+    }
+  };
+
   return (
     <div className="container mx-auto p-4">
       <h2 className="text-2xl font-bold mb-4">Quản lý lớp học</h2>
 
-      {/* Form tạo lớp mới */}
-      <form
-        onSubmit={handleSubmit}
-        className="mb-8 bg-white p-4 rounded shadow"
-      >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Tên lớp
-            </label>
-            <input
-              type="text"
-              value={newClassName}
-              onChange={(e) => setNewClassName(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-              placeholder="Nhập tên lớp"
-            />
+      <div className="bg-white p-4 rounded shadow mb-6">
+        <h3 className="text-lg font-semibold mb-4">Tạo lớp học mới</h3>
+        <form onSubmit={handleSubmit}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Tên lớp:</label>
+              <input
+                type="text"
+                value={newClassName}
+                onChange={(e) => setNewClassName(e.target.value)}
+                className="w-full p-2 border rounded"
+                placeholder="Nhập tên lớp"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Mô tả (tùy chọn):
+              </label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full p-2 border rounded"
+                placeholder="Nhập mô tả"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Ngày bắt đầu:
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full p-2 border rounded"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Tổng số buổi:
+              </label>
+              <input
+                type="number"
+                value={totalSessions}
+                onChange={(e) => setTotalSessions(e.target.value)}
+                className="w-full p-2 border rounded"
+                placeholder="Nhập số buổi học"
+                min="1"
+              />
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Ngày bắt đầu
-            </label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Số buổi học
-            </label>
-            <input
-              type="number"
-              value={totalSessions}
-              onChange={(e) => setTotalSessions(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-              placeholder="Nhập số buổi học"
-              min="1"
-            />
-          </div>
-        </div>
-        <div className="mt-4">
           <button
             type="submit"
             disabled={loading}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-blue-300"
+            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
           >
-            {loading ? "Đang tạo..." : "Thêm lớp"}
+            {loading ? "Đang xử lý..." : "Tạo lớp học"}
           </button>
-        </div>
-      </form>
-
-      {error && <div className="text-red-500 mb-4">{error}</div>}
-
-      {/* Danh sách lớp học */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {classes.map((cls) => (
-          <div key={cls._id} className="bg-white p-4 rounded shadow">
-            <h3 className="text-lg font-semibold">{cls.name}</h3>
-            <p className="text-gray-600">Số sinh viên: {cls.students.length}</p>
-            <p className="text-gray-600">Số buổi học: {cls.totalSessions}</p>
-            <p className="text-gray-600">
-              Số buổi nghỉ tối đa: {cls.maxAbsences}
-            </p>
-            <div className="mt-4 flex space-x-2">
-              <button
-                onClick={() => handleViewSchedule(cls._id)}
-                className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
-              >
-                Quản lý lớp
-              </button>
-              <button
-                onClick={() => handleDeleteClass(cls._id)}
-                disabled={deletingClass === cls._id || cls.students.length > 0}
-                className={`px-3 py-1 rounded ${
-                  deletingClass === cls._id || cls.students.length > 0
-                    ? "bg-gray-300 cursor-not-allowed"
-                    : "bg-red-500 hover:bg-red-600 text-white"
-                }`}
-              >
-                {deletingClass === cls._id ? "Đang xóa..." : "Xóa"}
-              </button>
-            </div>
-          </div>
-        ))}
+        </form>
+        {error && <div className="mt-2 text-red-500">{error}</div>}
       </div>
 
-      {/* Modal for class schedule */}
+      <div className="bg-white p-4 rounded shadow">
+        <h3 className="text-lg font-semibold mb-4">Danh sách lớp học</h3>
+        {loading ? (
+          <div className="text-center text-gray-500">Đang tải...</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="py-2 px-4 text-left">Tên lớp</th>
+                  <th className="py-2 px-4 text-left">Mô tả</th>
+                  <th className="py-2 px-4 text-left">Ngày bắt đầu</th>
+                  <th className="py-2 px-4 text-left">Số buổi</th>
+                  <th className="py-2 px-4 text-left">Số SV</th>
+                  <th className="py-2 px-4 text-left">Giáo viên</th>
+                  <th className="py-2 px-4 text-left">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {classes.length > 0 ? (
+                  classes.map((cls) => (
+                    <tr key={cls._id} className="border-b hover:bg-gray-50">
+                      <td className="py-2 px-4">{cls.name}</td>
+                      <td className="py-2 px-4">{cls.description || "-"}</td>
+                      <td className="py-2 px-4">
+                        {new Date(cls.startDate).toLocaleDateString()}
+                      </td>
+                      <td className="py-2 px-4">{cls.totalSessions}</td>
+                      <td className="py-2 px-4">{cls.studentCount}</td>
+                      <td className="py-2 px-4">
+                        {teachers[cls.teacher]?.name || (
+                          <span className="text-gray-400">Đang tải...</span>
+                        )}
+                        {currentUser._id === cls.teacher && (
+                          <span className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
+                            Của bạn
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-4">
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => handleViewSchedule(cls._id)}
+                            className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+                          >
+                            Quản lý lớp
+                          </button>
+
+                          <button
+                            onClick={() => handleExportExcel(cls._id, cls.name)}
+                            disabled={exportLoading === cls._id}
+                            className={`px-3 py-1 rounded ${
+                              exportLoading === cls._id
+                                ? "bg-gray-300 cursor-not-allowed"
+                                : "bg-green-500 hover:bg-green-600 text-white"
+                            }`}
+                          >
+                            {exportLoading === cls._id
+                              ? "Đang xuất..."
+                              : "Xuất Excel"}
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteClass(cls._id)}
+                            disabled={
+                              deletingClass === cls._id ||
+                              cls.students.length > 0
+                            }
+                            className={`px-3 py-1 rounded ${
+                              deletingClass === cls._id ||
+                              cls.students.length > 0
+                                ? "bg-gray-300 cursor-not-allowed"
+                                : "bg-red-500 hover:bg-red-600 text-white"
+                            }`}
+                          >
+                            {deletingClass === cls._id ? "Đang xóa..." : "Xóa"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="7" className="py-4 text-center text-gray-500">
+                      Chưa có lớp học nào.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {isModalOpen && selectedClass && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-10 p-4">
           <div className="bg-white p-4 rounded-lg shadow-lg w-full max-w-5xl max-h-[90vh] overflow-y-auto">
@@ -433,11 +554,9 @@ const ClassList = () => {
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {sessionAttendance.students.map((record) => {
-                        // Tìm thông tin sinh viên từ record.student (ID) trong danh sách students
                         let studentName = "N/A";
                         let studentId = "N/A";
 
-                        // Kiểm tra xem student có phải là object (đã populate) hay chỉ là ID
                         if (
                           record.student &&
                           typeof record.student === "object"

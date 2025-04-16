@@ -16,6 +16,7 @@ const Register = () => {
   const [loading, setLoading] = useState(false);
   const [videoStream, setVideoStream] = useState(null);
   const [faceLandmarks, setFaceLandmarks] = useState(null);
+  const [loadingClass, setLoadingClass] = useState(null);
 
   const videoRef = useRef();
   const canvasRef = useRef();

@@ -1,5 +1,10 @@
-import React, { useState } from "react";
-import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
+import React from "react";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import Register from "./components/Register";
@@ -8,98 +13,149 @@ import AttendanceList from "./components/AttendanceList";
 import ClassList from "./components/ClassList";
 import StudentList from "./components/StudentList";
 import AttendanceHistory from "./components/AttendanceHistory";
+import Login from "./components/Login";
+import AdminRegister from "./components/AdminRegister";
+import RegisterFirstAdmin from "./components/RegisterFirstAdmin";
+import ProtectedRoute from "./components/ProtectedRoute";
+import Navbar from "./components/Navbar";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { GoogleOAuthProvider } from "@react-oauth/google";
+// Import Admin components
+import AdminDashboard from "./components/admin/AdminDashboard";
+import AccountManagement from "./components/admin/AccountManagement";
+import ClassManagement from "./components/admin/ClassManagement";
 
-function App() {
-  const [activeTab, setActiveTab] = useState("register");
+// Thay YOUR_GOOGLE_CLIENT_ID bằng ID thật từ Google Cloud Console
+const GOOGLE_CLIENT_ID =
+  "100534880319-vs2rdo9iapvie4phdcnqi6gh10mjb79r.apps.googleusercontent.com";
+
+function AppContent() {
+  const { currentUser, isAdmin } = useAuth();
+
+  // Kiểm tra xem có đang đăng nhập không
+  const isLoggedIn = !!currentUser;
 
   return (
-    <Router>
-      <div className="min-h-screen bg-gray-100">
-        <ToastContainer position="top-right" autoClose={3000} />
-        <nav className="bg-white shadow-lg">
-          <div className="max-w-7xl mx-auto px-4">
-            <div className="flex justify-between h-16">
-              <div className="flex">
-                <div className="flex-shrink-0 flex items-center">
-                  <h1 className="text-xl font-bold text-gray-800">
-                    Hệ thống điểm danh khuôn mặt
-                  </h1>
-                </div>
-                <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
-                  <Link
-                    to="/register"
-                    className={`${
-                      activeTab === "register"
-                        ? "border-blue-500 text-gray-900"
-                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
-                    onClick={() => setActiveTab("register")}
-                  >
-                    Đăng ký
-                  </Link>
-                  <Link
-                    to="/attendance"
-                    className={`${
-                      activeTab === "attendance"
-                        ? "border-blue-500 text-gray-900"
-                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
-                    onClick={() => setActiveTab("attendance")}
-                  >
-                    Điểm danh
-                  </Link>
-                  <Link
-                    to="/classes"
-                    className={`${
-                      activeTab === "classes"
-                        ? "border-blue-500 text-gray-900"
-                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
-                    onClick={() => setActiveTab("classes")}
-                  >
-                    Quản lý lớp
-                  </Link>
-                  <Link
-                    to="/students"
-                    className={`${
-                      activeTab === "students"
-                        ? "border-blue-500 text-gray-900"
-                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
-                    onClick={() => setActiveTab("students")}
-                  >
-                    Danh sách sinh viên
-                  </Link>
-                  <Link
-                    to="/attendance-history"
-                    className={`${
-                      activeTab === "attendance-history"
-                        ? "border-blue-500 text-gray-900"
-                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium`}
-                    onClick={() => setActiveTab("attendance-history")}
-                  >
-                    Lịch sử điểm danh
-                  </Link>
-                </div>
-              </div>
-            </div>
-          </div>
-        </nav>
+    <div className="min-h-screen bg-gray-100">
+      <ToastContainer position="top-right" autoClose={3000} />
+      <Navbar />
 
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <Routes>
-            <Route path="/register" element={<Register />} />
-            <Route path="/attendance" element={<Attendance />} />
-            <Route path="/classes" element={<ClassList />} />
-            <Route path="/students" element={<StudentList />} />
-            <Route path="/attendance-list" element={<AttendanceList />} />
-            <Route path="/attendance-history" element={<AttendanceHistory />} />
-            <Route path="/" element={<Register />} />
-          </Routes>
-        </main>
-      </div>
-    </Router>
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <Routes>
+          {/* Public routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/admin-register" element={<AdminRegister />} />
+          <Route
+            path="/register-first-admin"
+            element={<RegisterFirstAdmin />}
+          />
+
+          {/* Admin routes */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute adminOnly={true}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/teachers"
+            element={
+              <ProtectedRoute adminOnly={true}>
+                <AccountManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/classes"
+            element={
+              <ProtectedRoute adminOnly={true}>
+                <ClassManagement />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Teacher routes */}
+          <Route
+            path="/register"
+            element={
+              <ProtectedRoute>
+                <Register />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/attendance"
+            element={
+              <ProtectedRoute>
+                <Attendance />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/classes"
+            element={
+              <ProtectedRoute>
+                <ClassList />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/students"
+            element={
+              <ProtectedRoute>
+                <StudentList />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/attendance-list"
+            element={
+              <ProtectedRoute>
+                <AttendanceList />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/history"
+            element={
+              <ProtectedRoute>
+                <AttendanceHistory />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Redirect home based on auth state */}
+          <Route
+            path="/"
+            element={
+              isLoggedIn ? (
+                isAdmin() ? (
+                  <Navigate to="/admin" />
+                ) : (
+                  <Navigate to="/classes" />
+                )
+              ) : (
+                <Navigate to="/login" />
+              )
+            }
+          />
+        </Routes>
+      </main>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      <Router>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </Router>
+    </GoogleOAuthProvider>
   );
 }
 

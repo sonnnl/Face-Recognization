@@ -118,25 +118,34 @@ npm run client
 - Chỉ có thể xóa các lớp học chưa có sinh viên đăng ký
 - Nếu lớp có sinh viên, cần chuyển sinh viên sang lớp khác trước khi xóa
 
+## Phân quyền người dùng
+
+Hệ thống hỗ trợ phân quyền với hai vai trò người dùng: Admin và Giáo viên.
+
+### Vai trò Admin
+
+- Truy cập đầy đủ vào tất cả các lớp học trong hệ thống
+- Tạo, xem, chỉnh sửa và xóa bất kỳ lớp học nào
+- Chỉ định giáo viên cho các lớp học
+- Đăng ký và quản lý sinh viên cho tất cả các lớp học
+- Xem lịch sử điểm danh cho tất cả các lớp
+
+### Vai trò Giáo viên
+
+- Chỉ có thể truy cập và quản lý các lớp học được chỉ định
+- Đăng ký và quản lý sinh viên chỉ cho các lớp học được chỉ định
+- Tiến hành điểm danh chỉ cho các lớp học được chỉ định
+- Xem lịch sử điểm danh chỉ cho các lớp học được chỉ định
+
+### Đăng nhập và Bảo mật
+
+- Đăng nhập bằng email và mật khẩu hoặc tài khoản Google
+- Hỗ trợ đăng ký tài khoản mới cho giáo viên
+- Tài khoản Admin được thiết lập mặc định trong hệ thống
+- Bảo mật thông tin lớp học và sinh viên theo vai trò người dùng
+
 ### Cấu trúc thư mục
 
 ```
-/
-|-- server/         # Backend code
-|-- src/            # Frontend code
-|   |-- components/ # React components
-|   |-- config/     # Configuration files
-|   |-- models/     # Data models
-|-- public/         # Static files
-|   |-- models/     # face-api.js model files
+
 ```
-
-### API Endpoints
-
-- `GET /api/classes` - Lấy danh sách lớp học
-- `POST /api/classes` - Tạo lớp học mới
-- `DELETE /api/classes/:id` - Xóa lớp học
-- `GET /api/students/class/:classId` - Lấy danh sách sinh viên theo lớp
-- `POST /api/students` - Đăng ký sinh viên mới
-- `POST /api/attendance` - Tạo bản ghi điểm danh
-- `GET /api/attendance/:classId` - Lấy điểm danh trong ngày theo lớp

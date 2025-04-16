@@ -17,6 +17,10 @@ const attendanceSchema = new mongoose.Schema({
     enum: ["in_progress", "completed"],
     default: "in_progress",
   },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Teacher",
+  },
   createdAt: { type: Date, default: Date.now },
 });
 
