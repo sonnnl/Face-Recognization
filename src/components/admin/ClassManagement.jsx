@@ -7,6 +7,7 @@ const ClassManagement = () => {
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showTeacherModal, setShowTeacherModal] = useState(false);
   const [currentClass, setCurrentClass] = useState(null);
@@ -129,6 +130,28 @@ const ClassManagement = () => {
     }
   };
 
+  // Đồng bộ số lượng sinh viên
+  const syncStudentCount = async () => {
+    try {
+      setSyncing(true);
+      const response = await axios.post("/api/admin/sync-student-count");
+
+      // Nếu có lớp học nào được cập nhật, tải lại danh sách
+      if (response.data.updatedClasses > 0) {
+        const classesResponse = await axios.get("/api/classes");
+        setClasses(classesResponse.data);
+        toast.success(`Đã đồng bộ ${response.data.updatedClasses} lớp học`);
+      } else {
+        toast.info("Tất cả các lớp học đã đồng bộ");
+      }
+    } catch (error) {
+      console.error("Error syncing student count:", error);
+      toast.error("Lỗi khi đồng bộ số lượng sinh viên");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // Get teacher name by ID
   const getTeacherName = (teacherId) => {
     const teacher = teachers.find((t) => t._id === teacherId);
@@ -144,12 +167,51 @@ const ClassManagement = () => {
             Quản lý thông tin lớp học và phân công giảng viên
           </p>
         </div>
-        <Link
-          to="/admin"
-          className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
-        >
-          ← Quay lại Dashboard
-        </Link>
+        <div className="flex space-x-3">
+          <button
+            onClick={syncStudentCount}
+            disabled={syncing || loading}
+            className={`px-4 py-2 rounded ${
+              syncing || loading
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-green-500 text-white hover:bg-green-600"
+            }`}
+          >
+            {syncing ? (
+              <span className="flex items-center">
+                <svg
+                  className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                Đang đồng bộ...
+              </span>
+            ) : (
+              "Đồng bộ số SV"
+            )}
+          </button>
+          <Link
+            to="/admin"
+            className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
+          >
+            ← Quay lại Dashboard
+          </Link>
+        </div>
       </div>
 
       {loading ? (

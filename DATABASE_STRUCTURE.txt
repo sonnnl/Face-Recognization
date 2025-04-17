@@ -1,0 +1,123 @@
+# CẤU TRÚC CƠ SỞ DỮ LIỆU HỆ THỐNG ĐIỂM DANH KHUÔN MẶT
+
+Hệ thống sử dụng MongoDB làm cơ sở dữ liệu NoSQL. Dưới đây là mô tả chi tiết về các collections và mối quan hệ giữa chúng.
+
+## 1. COLLECTIONS (BẢNG DỮ LIỆU)
+
+### 1.1. ACCOUNT (Tài khoản người dùng)
+- **Mô tả**: Lưu trữ thông tin tài khoản người dùng, bao gồm cả admin và giảng viên. Đây là collection thay thế cho Teacher trước đây.
+- **Các trường chính**:
+  - `_id`: ObjectId (Khóa chính, tự động tạo)
+  - `name`: String (Tên người dùng)
+  - `email`: String (Email, duy nhất)
+  - `password`: String (Mật khẩu đã được mã hóa)
+  - `googleId`: String (ID từ đăng nhập Google, nếu có)
+  - `role`: String (Vai trò: "teacher" hoặc "admin")
+  - `status`: String (Trạng thái: "active", "inactive", "pending", "blocked")
+  - `createdAt`: Date (Ngày tạo tài khoản)
+  - `lastLogin`: Date (Lần đăng nhập cuối)
+
+### 1.2. CLASS (Lớp học)
+- **Mô tả**: Lưu trữ thông tin về các lớp học trong hệ thống.
+- **Các trường chính**:
+  - `_id`: ObjectId (Khóa chính, tự động tạo)
+  - `name`: String (Tên lớp học, duy nhất)
+  - `description`: String (Mô tả lớp học, tùy chọn)
+  - `teacher`: ObjectId (Tham chiếu đến Account, giảng viên phụ trách)
+  - `startDate`: Date (Ngày bắt đầu)
+  - `totalSessions`: Number (Tổng số buổi học)
+  - `maxAbsences`: Number (Số buổi vắng tối đa cho phép)
+  - `studentCount`: Number (Số lượng sinh viên trong lớp)
+  - `students`: Array<ObjectId> (Danh sách tham chiếu đến sinh viên)
+  - `schedule`: Array (Lịch học của lớp)
+    - `sessionNumber`: Number (Số thứ tự buổi học)
+    - `date`: Date (Ngày học)
+    - `status`: String ("pending" hoặc "completed")
+  - `createdAt`: Date (Ngày tạo lớp)
+
+### 1.3. STUDENT (Sinh viên)
+- **Mô tả**: Lưu trữ thông tin sinh viên và dữ liệu khuôn mặt để nhận diện.
+- **Các trường chính**:
+  - `_id`: ObjectId (Khóa chính, tự động tạo)
+  - `name`: String (Tên sinh viên)
+  - `studentId`: String (Mã số sinh viên, duy nhất)
+  - `classId`: ObjectId (Tham chiếu đến Class)
+  - `faceImage`: String (Hình ảnh khuôn mặt dạng base64)
+  - `faceFeatures`: Object (Đặc trưng khuôn mặt để nhận diện)
+  - `registeredAt`: Date (Ngày đăng ký)
+  - `status`: String ("active" hoặc "inactive")
+
+### 1.4. ATTENDANCE (Điểm danh)
+- **Mô tả**: Lưu trữ thông tin điểm danh cho từng buổi học.
+- **Các trường chính**:
+  - `_id`: ObjectId (Khóa chính, tự động tạo)
+  - `classId`: ObjectId (Tham chiếu đến Class)
+  - `sessionNumber`: Number (Số thứ tự buổi học)
+  - `date`: Date (Ngày diễn ra buổi học)
+  - `students`: Array (Danh sách điểm danh sinh viên)
+    - `student`: ObjectId (Tham chiếu đến Student)
+    - `present`: Boolean (Trạng thái có mặt)
+    - `timeRecorded`: Date (Thời điểm điểm danh)
+    - `note`: String (Ghi chú, nếu có)
+  - `status`: String ("ongoing" hoặc "completed")
+  - `createdBy`: ObjectId (Tham chiếu đến Account, người tạo phiên điểm danh)
+
+## 2. MỐI QUAN HỆ GIỮA CÁC COLLECTIONS
+
+### 2.1. Account - Class
+- Một Account (giảng viên) có thể quản lý nhiều Class (lớp học)
+- Một Class thuộc về một Account (giảng viên) duy nhất
+- Mối quan hệ: 1 - N (một-nhiều)
+
+### 2.2. Class - Student
+- Một Class (lớp học) có thể có nhiều Student (sinh viên)
+- Một Student thuộc về một Class duy nhất
+- Mối quan hệ: 1 - N (một-nhiều)
+
+### 2.3. Class - Attendance
+- Một Class (lớp học) có thể có nhiều bản ghi Attendance (điểm danh)
+- Mỗi bản ghi Attendance thuộc về một Class duy nhất
+- Mối quan hệ: 1 - N (một-nhiều)
+
+### 2.4. Student - Attendance
+- Một Student (sinh viên) có thể có nhiều bản ghi trong các phiên Attendance
+- Các bản ghi Attendance có tham chiếu đến nhiều Student
+- Mối quan hệ: M - N (nhiều-nhiều) thông qua mảng students trong Attendance
+
+### 2.5. Account - Attendance
+- Một Account (giảng viên) có thể tạo nhiều phiên Attendance
+- Mỗi phiên Attendance được tạo bởi một Account duy nhất
+- Mối quan hệ: 1 - N (một-nhiều)
+
+## 3. CHỈ MỤC (INDEXES)
+
+Các chỉ mục được tạo để tối ưu hiệu suất truy vấn:
+
+- **Account**: `email` (unique), `googleId` (unique, sparse)
+- **Class**: `name` (unique), `teacher`
+- **Student**: `studentId` (unique), `classId`
+- **Attendance**: `classId`, `sessionNumber`
+
+## 4. TÍNH NĂNG NÂNG CAO
+
+### 4.1. Middleware và Hooks
+
+- **Class**:
+  - Pre-save hook: Tự động cập nhật `studentCount` dựa trên độ dài của mảng `students`
+  - Pre-findOneAndUpdate hook: Cập nhật `studentCount` khi thêm/xóa sinh viên
+  - Post-find và post-findOne hooks: Đảm bảo `studentCount` luôn đồng bộ
+
+- **Account**:
+  - Pre-save hook: Mã hóa mật khẩu trước khi lưu
+  - Methods: So sánh mật khẩu, ẩn mật khẩu khi chuyển đổi sang JSON
+
+### 4.2. Virtual Properties
+
+- **Class**:
+  - `calculatedStudentCount`: Tính toán số lượng sinh viên dựa trên mảng `students`
+
+## 5. LƯU Ý VỀ CHUYỂN ĐỔI
+
+Hệ thống đã chuyển đổi từ model `Teacher` sang model `Account` để quản lý người dùng tốt hơn. Tuy nhiên, một số schema (như Class) vẫn giữ tham chiếu đến "Teacher" thay vì "Account", điều này có thể gây ra vấn đề không nhất quán trong cơ sở dữ liệu và cần được cập nhật.
+
+Các API endpoint và middleware xác thực đã được cập nhật để sử dụng `req.account` thay vì `req.teacher`. 

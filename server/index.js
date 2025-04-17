@@ -2161,6 +2161,42 @@ app.delete("/api/admin/students/:id", auth, adminOnly, async (req, res) => {
   }
 });
 
+// Thêm API endpoint để đồng bộ số lượng sinh viên
+app.post("/api/admin/sync-student-count", auth, adminOnly, async (req, res) => {
+  try {
+    console.log("Admin triggered student count synchronization");
+
+    // Lấy tất cả các lớp học
+    const classes = await Class.find({});
+    let updatedCount = 0;
+
+    // Cập nhật số lượng sinh viên cho từng lớp
+    for (const classItem of classes) {
+      const actualCount = classItem.students.length;
+
+      // Chỉ cập nhật nếu số lượng không khớp
+      if (classItem.studentCount !== actualCount) {
+        await Class.findByIdAndUpdate(classItem._id, {
+          studentCount: actualCount,
+        });
+        updatedCount++;
+      }
+    }
+
+    res.json({
+      message: "Đồng bộ số lượng sinh viên thành công",
+      totalClasses: classes.length,
+      updatedClasses: updatedCount,
+    });
+  } catch (error) {
+    console.error("Error syncing student count:", error);
+    res.status(500).json({
+      message: "Lỗi khi đồng bộ số lượng sinh viên",
+      error: error.message,
+    });
+  }
+});
+
 // ==================== ERROR HANDLING ====================
 
 // Error handling middleware
