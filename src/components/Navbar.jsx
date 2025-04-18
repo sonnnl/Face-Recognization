@@ -73,7 +73,7 @@ function Navbar() {
         to="/classes"
         className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
       >
-        <ClipboardDocumentListIcon className="h-5 w-5 mr-2" />
+        <HomeIcon className="h-5 w-5 mr-2" />
         Lớp học
       </Link>
       <Link
@@ -96,6 +96,13 @@ function Navbar() {
       >
         <ClipboardDocumentListIcon className="h-5 w-5 mr-2" />
         Lịch sử điểm danh
+      </Link>
+      <Link
+        to="/students"
+        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
+      >
+        <UserGroupIcon className="h-5 w-5 mr-2" />
+        Danh sách sinh viên
       </Link>
       <button
         onClick={handleLogout}

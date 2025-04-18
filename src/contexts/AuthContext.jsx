@@ -131,38 +131,30 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Đăng nhập bằng Google
-  const loginWithGoogle = async (tokenId) => {
+  const loginWithGoogle = async (googleToken) => {
     try {
-      setError(null);
-      const response = await axios.post("/api/auth/google-login", { tokenId });
+      console.log("Attempting Google login with token");
+      const response = await axios.post("/api/auth/google", { googleToken });
+      console.log("Google login API response:", response.data);
 
-      const { token, account } = response.data;
-      console.log("Google login response:", response.data);
-
-      // Lưu token và thông tin người dùng
-      localStorage.setItem("token", token);
-      localStorage.setItem("account", JSON.stringify(account));
-
-      // Đặt header cho axios
-      axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-
-      // Đặt thông tin người dùng vào context và đợi state được cập nhật
-      return new Promise((resolve) => {
-        setCurrentUser(account);
-        console.log("Current user set in context after Google login:", account);
-        // Sử dụng setTimeout để đảm bảo state đã cập nhật
-        setTimeout(() => resolve(true), 100);
-      });
+      // Lưu token và set current user nếu đăng nhập thành công
+      localStorage.setItem("token", response.data.token);
+      axios.defaults.headers.common[
+        "Authorization"
+      ] = `Bearer ${response.data.token}`;
+      setCurrentUser(response.data.user);
+      return response.data;
     } catch (error) {
-      console.error("Đăng nhập Google thất bại:", error);
+      console.error("Google login failed:", error);
 
-      if (error.response) {
-        setError(error.response.data.message || "Đăng nhập thất bại");
-      } else {
-        setError("Lỗi kết nối server");
+      // Kiểm tra xem lỗi có phải do tài khoản đang chờ duyệt hay không
+      if (error.response?.data?.isPending) {
+        throw {
+          pendingAccount: true,
+          message: error.response.data.message,
+        };
       }
-
-      return false;
+      throw error;
     }
   };
 

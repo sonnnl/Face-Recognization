@@ -4,12 +4,12 @@ import bcrypt from "bcrypt";
 const accountSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
+    required: [true, "Vui lòng nhập tên"],
     trim: true,
   },
   email: {
     type: String,
-    required: true,
+    required: [true, "Vui lòng nhập email"],
     unique: true,
     trim: true,
     lowercase: true,
@@ -20,8 +20,7 @@ const accountSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true,
-    minlength: 6,
+    trim: true,
   },
   googleId: {
     type: String,
@@ -30,13 +29,18 @@ const accountSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ["teacher", "admin"],
+    enum: ["admin", "teacher"],
     default: "teacher",
   },
   status: {
     type: String,
-    enum: ["active", "inactive", "pending", "blocked"],
-    default: "active",
+    enum: ["active", "pending", "blocked"],
+    default: "active", // Admin vẫn mặc định là active
+  },
+  provider: {
+    type: String,
+    enum: ["credentials", "google"],
+    default: "credentials",
   },
   createdAt: {
     type: Date,
@@ -44,6 +48,7 @@ const accountSchema = new mongoose.Schema({
   },
   lastLogin: {
     type: Date,
+    default: Date.now,
   },
 });
 

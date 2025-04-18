@@ -9,6 +9,8 @@ const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState("");
+  const [error, setError] = useState("");
 
   const navigate = useNavigate();
   const {
@@ -70,23 +72,43 @@ const Login = () => {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleLogin = async (response) => {
     try {
-      const decoded = jwtDecode(credentialResponse.credential);
-      console.log("Google login success:", decoded);
+      setError("");
+      setPendingMessage("");
+      setLoading(true);
 
-      // loginWithGoogle giờ trả về Promise được resolve sau khi currentUser được cập nhật
-      const success = await loginWithGoogle(credentialResponse.credential);
+      console.log("Google login response received", response);
 
-      if (success) {
-        toast.success("Đăng nhập với Google thành công");
-        // useEffect sẽ xử lý việc điều hướng khi currentUser thay đổi
-      } else {
-        toast.error(authError || "Đăng nhập với Google thất bại");
-      }
+      // Lấy token từ response của Google
+      const googleToken = response.credential;
+
+      await loginWithGoogle(googleToken);
+
+      // Nếu thành công, chuyển hướng về trang chủ
+      navigate("/");
     } catch (error) {
       console.error("Google login error:", error);
-      toast.error("Đăng nhập với Google thất bại");
+
+      if (error.pendingAccount) {
+        // Hiển thị thông báo tài khoản đang chờ duyệt
+        setPendingMessage(error.message);
+      } else if (error.response && error.response.data) {
+        // Kiểm tra xem có phải tài khoản đang chờ duyệt từ response không
+        if (error.response.data.isPending) {
+          setPendingMessage(error.response.data.message);
+        } else {
+          // Hiển thị lỗi thông thường
+          setError(error.response.data.message || "Đăng nhập thất bại");
+          toast.error(error.response.data.message || "Đăng nhập thất bại");
+        }
+      } else {
+        // Lỗi khác
+        setError("Đăng nhập với Google thất bại. Vui lòng thử lại sau.");
+        toast.error("Đăng nhập với Google thất bại");
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -104,6 +126,18 @@ const Login = () => {
         {authError && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
             {authError}
+          </div>
+        )}
+
+        {pendingMessage && (
+          <div
+            className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4"
+            role="alert"
+          >
+            <p>{pendingMessage}</p>
+            <p className="font-medium mt-2">
+              Vui lòng liên hệ quản trị viên để kích hoạt tài khoản.
+            </p>
           </div>
         )}
 
@@ -158,7 +192,7 @@ const Login = () => {
 
           <div className="flex justify-center mt-2">
             <GoogleLogin
-              onSuccess={handleGoogleSuccess}
+              onSuccess={handleGoogleLogin}
               onError={handleGoogleError}
               theme="filled_blue"
               shape="rectangular"

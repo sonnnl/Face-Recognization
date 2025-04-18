@@ -121,3 +121,85 @@ Các chỉ mục được tạo để tối ưu hiệu suất truy vấn:
 Hệ thống đã chuyển đổi từ model `Teacher` sang model `Account` để quản lý người dùng tốt hơn. Tuy nhiên, một số schema (như Class) vẫn giữ tham chiếu đến "Teacher" thay vì "Account", điều này có thể gây ra vấn đề không nhất quán trong cơ sở dữ liệu và cần được cập nhật.
 
 Các API endpoint và middleware xác thực đã được cập nhật để sử dụng `req.account` thay vì `req.teacher`. 
+
+
+
+### Cấu trúc để mở rộng trong tương lai:
+1. Account (Người dùng)
+Thêm vai trò student để sinh viên có thể đăng nhập (xem lịch sử, ảnh của mình, trạng thái điểm danh).
+
+
+{
+  _id,
+  name,
+  email,
+  password,
+  role: "admin" | "teacher" | "student",
+  status,
+  createdAt,
+  lastLogin
+}
+2. Class (Lớp học)
+Tách lịch học thành collection riêng để quản lý linh hoạt.
+
+
+{
+  _id,
+  name,
+  teacherId: ObjectId (Account),
+  studentIds: [ObjectId] (Account, role="student"),
+  startDate,
+  maxAbsences,
+  createdAt
+}
+3. ClassSchedule (Lịch học)
+
+{
+  _id,
+  classId: ObjectId,
+  sessionNumber,
+  date,
+  status: "pending" | "completed",
+  deviceId: ObjectId, // nếu dùng nhiều camera
+  location: String
+}
+4. AttendanceSession (Phiên điểm danh)
+Tách phiên điểm danh ra khỏi ClassSchedule để lưu thông tin chính xác từng buổi học:
+
+
+{
+  _id,
+  scheduleId: ObjectId (ClassSchedule),
+  createdBy: ObjectId (Account, thường là giảng viên),
+  createdAt,
+  status: "ongoing" | "completed"
+}
+5. AttendanceRecord (Chi tiết điểm danh từng sinh viên)
+
+{
+  _id,
+  sessionId: ObjectId (AttendanceSession),
+  studentId: ObjectId (Account),
+  present: Boolean,
+  timeRecorded,
+  imageCaptured: String (ảnh lúc điểm danh),
+  note
+}
+6. FaceData (Dữ liệu khuôn mặt)
+Tách riêng dữ liệu khuôn mặt để dễ quản lý và update:
+
+{
+  _id,
+  studentId: ObjectId (Account),
+  faceImage: String (base64 hoặc URL),
+  faceFeatures: Object,
+  version: Number,
+  registeredAt
+}
+
+###Dự kiến mở rộng:
+---Thêm role Student (Xem điểm chuyên cần, thông tin giáo viên, lịch sử điểm danh của mình ....)
+---Thêm chức năng gửi gmail khi sinh viên nghỉ bằng số buổi tối đa được nghỉ
+---Thêm tick đi trễ(-0.5 điểm hoặc 1 điểm tùy)
+---Thêm chức năng profile, avt, đổi mật khẩu, quyên mật khẩu
+ 

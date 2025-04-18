@@ -10,6 +10,7 @@ import Account from "../src/models/Account.js";
 import { auth, adminOnly, generateToken } from "../src/middleware/auth.js";
 import axios from "axios";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -1869,6 +1870,98 @@ app.post("/api/auth/google-login", async (req, res) => {
   }
 });
 
+// Xử lý đăng nhập Google
+app.post("/api/auth/google", async (req, res) => {
+  try {
+    const { googleToken } = req.body;
+
+    if (!googleToken) {
+      return res.status(400).json({ message: "googleToken is required" });
+    }
+
+    // Giải mã token để lấy thông tin người dùng
+    const decodedToken = jwt.decode(googleToken);
+    if (!decodedToken) {
+      return res.status(400).json({ message: "Token không hợp lệ" });
+    }
+
+    const { email, name, sub: googleId } = decodedToken;
+
+    console.log("Google login attempt for:", email, "GoogleID:", googleId);
+
+    // Tìm xem tài khoản đã tồn tại chưa
+    let account = await Account.findOne({ $or: [{ email }, { googleId }] });
+
+    if (account) {
+      // Tài khoản đã tồn tại
+      console.log(
+        "Found existing account:",
+        account.email,
+        "Status:",
+        account.status
+      );
+
+      if (account.status === "pending") {
+        return res.status(403).json({
+          message: "Tài khoản giảng viên của bạn đang chờ được phê duyệt",
+          isPending: true,
+        });
+      }
+
+      if (account.status === "blocked") {
+        return res
+          .status(403)
+          .json({ message: "Tài khoản của bạn đã bị khóa" });
+      }
+
+      // Cập nhật googleId nếu chưa có
+      if (!account.googleId) {
+        account.googleId = googleId;
+        await account.save();
+      }
+    } else {
+      // Tạo tài khoản mới với trạng thái 'pending'
+      console.log("Creating new account for:", email);
+      account = new Account({
+        name,
+        email,
+        googleId,
+        password: crypto.randomBytes(20).toString("hex"), // Mật khẩu ngẫu nhiên
+        role: "teacher", // Mặc định là giảng viên khi đăng ký bằng Google
+        status: "pending", // Trạng thái chờ duyệt
+        createdAt: new Date(),
+      });
+
+      await account.save();
+
+      return res.status(403).json({
+        message:
+          "Tài khoản của bạn đã được tạo và đang chờ phê duyệt từ quản trị viên",
+        isPending: true,
+      });
+    }
+
+    // Tạo token JWT cho đăng nhập thành công
+    const token = generateToken(account._id);
+
+    // Cập nhật thời gian đăng nhập cuối
+    account.lastLogin = new Date();
+    await account.save();
+
+    console.log("Login successful for:", account.email);
+
+    res.json({
+      token,
+      user: account,
+    });
+  } catch (error) {
+    console.error("Error in Google authentication:", error);
+    res
+      .status(500)
+      .json({ message: "Lỗi xác thực Google", error: error.message });
+  }
+});
+
 // ==================== TEACHER ROUTES ====================
 
 // Lấy thông tin cơ bản của giáo viên theo ID
@@ -2016,6 +2109,91 @@ app.delete("/api/admin/teachers/:id", auth, adminOnly, async (req, res) => {
     console.error("Error deleting teacher:", error);
     res.status(500).json({
       message: "Lỗi khi xóa tài khoản giáo viên",
+      error: error.message,
+    });
+  }
+});
+
+// Endpoint duyệt tài khoản giáo viên (chỉ admin)
+app.put(
+  "/api/admin/teachers/:id/approve",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!isValidObjectId(id)) {
+        return res.status(400).json({
+          message: "ID tài khoản không hợp lệ",
+        });
+      }
+
+      const account = await Account.findById(id);
+      if (!account) {
+        return res.status(404).json({
+          message: "Không tìm thấy tài khoản",
+        });
+      }
+
+      // Cập nhật trạng thái
+      account.status = "active";
+      await account.save();
+
+      res.json({
+        message: "Đã duyệt tài khoản thành công",
+        account: {
+          _id: account._id,
+          name: account.name,
+          email: account.email,
+          status: account.status,
+        },
+      });
+    } catch (error) {
+      console.error("Error approving account:", error);
+      res.status(500).json({
+        message: "Lỗi khi duyệt tài khoản",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Endpoint từ chối tài khoản giáo viên (chỉ admin)
+app.put("/api/admin/teachers/:id/reject", auth, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID tài khoản không hợp lệ",
+      });
+    }
+
+    const account = await Account.findById(id);
+    if (!account) {
+      return res.status(404).json({
+        message: "Không tìm thấy tài khoản",
+      });
+    }
+
+    // Cập nhật trạng thái
+    account.status = "blocked";
+    await account.save();
+
+    res.json({
+      message: "Đã từ chối tài khoản thành công",
+      account: {
+        _id: account._id,
+        name: account.name,
+        email: account.email,
+        status: account.status,
+      },
+    });
+  } catch (error) {
+    console.error("Error rejecting account:", error);
+    res.status(500).json({
+      message: "Lỗi khi từ chối tài khoản",
       error: error.message,
     });
   }

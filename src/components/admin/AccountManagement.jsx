@@ -17,6 +17,7 @@ const AccountManagement = () => {
     role: "teacher",
     status: "active",
   });
+  const [activeTab, setActiveTab] = useState("active"); // 'active', 'pending'
 
   // Lấy danh sách tài khoản
   useEffect(() => {
@@ -148,6 +149,51 @@ const AccountManagement = () => {
     }
   };
 
+  // Thêm hàm lọc tài khoản theo trạng thái
+  const filteredAccounts = accounts.filter((account) => {
+    if (activeTab === "active") return account.status === "active";
+    if (activeTab === "pending") return account.status === "pending";
+    return true;
+  });
+
+  // Thêm hàm duyệt tài khoản
+  const handleApproveAccount = async (accountId) => {
+    try {
+      await axios.put(`/api/admin/teachers/${accountId}/approve`);
+
+      // Cập nhật state
+      setAccounts(
+        accounts.map((account) =>
+          account._id === accountId ? { ...account, status: "active" } : account
+        )
+      );
+
+      toast.success("Đã duyệt tài khoản thành công");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Lỗi khi duyệt tài khoản");
+    }
+  };
+
+  // Thêm hàm từ chối tài khoản
+  const handleRejectAccount = async (accountId) => {
+    try {
+      await axios.put(`/api/admin/teachers/${accountId}/reject`);
+
+      // Cập nhật state
+      setAccounts(
+        accounts.map((account) =>
+          account._id === accountId
+            ? { ...account, status: "blocked" }
+            : account
+        )
+      );
+
+      toast.success("Đã từ chối tài khoản thành công");
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Lỗi khi từ chối tài khoản");
+    }
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-6">
@@ -172,6 +218,39 @@ const AccountManagement = () => {
           >
             Thêm tài khoản
           </button>
+        </div>
+      </div>
+
+      {/* Thêm UI tab cho danh sách tài khoản */}
+      <div className="mb-4">
+        <div className="border-b border-gray-200">
+          <nav className="-mb-px flex">
+            <button
+              onClick={() => setActiveTab("active")}
+              className={`py-2 px-4 text-center border-b-2 font-medium text-sm ${
+                activeTab === "active"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              Tài khoản đang hoạt động
+            </button>
+            <button
+              onClick={() => setActiveTab("pending")}
+              className={`py-2 px-4 text-center border-b-2 font-medium text-sm ${
+                activeTab === "pending"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              Tài khoản chờ duyệt
+              {accounts.filter((a) => a.status === "pending").length > 0 && (
+                <span className="ml-2 py-0.5 px-2 bg-red-500 text-white text-xs rounded-full">
+                  {accounts.filter((a) => a.status === "pending").length}
+                </span>
+              )}
+            </button>
+          </nav>
         </div>
       </div>
 
@@ -206,7 +285,7 @@ const AccountManagement = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {accounts.length === 0 ? (
+              {filteredAccounts.length === 0 ? (
                 <tr>
                   <td
                     colSpan="6"
@@ -216,7 +295,7 @@ const AccountManagement = () => {
                   </td>
                 </tr>
               ) : (
-                accounts.map((account) => (
+                filteredAccounts.map((account) => (
                   <tr key={account._id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
@@ -268,19 +347,38 @@ const AccountManagement = () => {
                       {new Date(account.createdAt).toLocaleDateString("vi-VN")}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <button
-                        onClick={() => openEditModal(account)}
-                        className="text-indigo-600 hover:text-indigo-900 mr-4"
-                      >
-                        Sửa
-                      </button>
-                      <button
-                        onClick={() => openDeleteModal(account)}
-                        className="text-red-600 hover:text-red-900"
-                        disabled={account.role === "admin"}
-                      >
-                        Xóa
-                      </button>
+                      {activeTab === "pending" ? (
+                        <>
+                          <button
+                            onClick={() => handleApproveAccount(account._id)}
+                            className="text-green-600 hover:text-green-900 mr-3"
+                          >
+                            Duyệt
+                          </button>
+                          <button
+                            onClick={() => handleRejectAccount(account._id)}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            Từ chối
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => openEditModal(account)}
+                            className="text-blue-600 hover:text-blue-900 mr-3"
+                          >
+                            Sửa
+                          </button>
+                          <button
+                            onClick={() => openDeleteModal(account)}
+                            className="text-red-600 hover:text-red-900"
+                            disabled={account.role === "admin"}
+                          >
+                            Xóa
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))
