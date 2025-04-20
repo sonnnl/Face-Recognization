@@ -4,6 +4,11 @@ import { toast } from "react-toastify";
 import { useAuth } from "../contexts/AuthContext";
 import { GoogleLogin } from "@react-oauth/google";
 import { jwtDecode } from "jwt-decode";
+import {
+  UserIcon,
+  AcademicCapIcon,
+  UserGroupIcon,
+} from "@heroicons/react/24/solid";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -11,6 +16,7 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [pendingMessage, setPendingMessage] = useState("");
   const [error, setError] = useState("");
+  const [userRole, setUserRole] = useState("teacher"); // "teacher", "student"
 
   const navigate = useNavigate();
   const {
@@ -83,12 +89,27 @@ const Login = () => {
       // Lấy token từ response của Google
       const googleToken = response.credential;
 
-      await loginWithGoogle(googleToken);
+      // Thêm role vào khi đăng nhập bằng Google
+      const loginResponse = await loginWithGoogle(googleToken, userRole);
 
-      // Nếu thành công, chuyển hướng về trang chủ
-      navigate("/");
+      // Nếu là sinh viên mới => chuyển đến trang đăng ký thông tin
+      if (userRole === "student" && loginResponse.isNewUser) {
+        navigate("/student-register");
+      } else {
+        // Nếu là giáo viên hoặc sinh viên đã có => chuyển hướng về trang chủ
+        navigate("/");
+      }
     } catch (error) {
       console.error("Google login error:", error);
+
+      // Log chi tiết hơn về lỗi 500
+      if (error.response && error.response.status === 500) {
+        console.error("Lỗi server 500:", error.response.data);
+        console.error(
+          "Chi tiết lỗi:",
+          JSON.stringify(error.response.data, null, 2)
+        );
+      }
 
       if (error.pendingAccount) {
         // Hiển thị thông báo tài khoản đang chờ duyệt
@@ -123,9 +144,44 @@ const Login = () => {
           Đăng nhập
         </h2>
 
+        {/* Lựa chọn vai trò */}
+        <div className="mb-6">
+          <p className="text-gray-700 text-sm font-bold mb-3">Tôi là:</p>
+          <div className="flex space-x-2">
+            <button
+              onClick={() => setUserRole("teacher")}
+              className={`flex-1 flex items-center justify-center py-3 px-4 rounded-lg border-2 ${
+                userRole === "teacher"
+                  ? "border-blue-500 bg-blue-50 text-blue-700"
+                  : "border-gray-300 text-gray-600"
+              }`}
+            >
+              <AcademicCapIcon className="h-5 w-5 mr-2" />
+              Giảng viên
+            </button>
+            <button
+              onClick={() => setUserRole("student")}
+              className={`flex-1 flex items-center justify-center py-3 px-4 rounded-lg border-2 ${
+                userRole === "student"
+                  ? "border-green-500 bg-green-50 text-green-700"
+                  : "border-gray-300 text-gray-600"
+              }`}
+            >
+              <UserGroupIcon className="h-5 w-5 mr-2" />
+              Sinh viên
+            </button>
+          </div>
+        </div>
+
         {authError && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
             {authError}
+          </div>
+        )}
+
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+            {error}
           </div>
         )}
 
@@ -134,10 +190,30 @@ const Login = () => {
             className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4"
             role="alert"
           >
-            <p>{pendingMessage}</p>
-            <p className="font-medium mt-2">
-              Vui lòng liên hệ quản trị viên để kích hoạt tài khoản.
-            </p>
+            <div className="flex">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6 mr-2"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
+              <div>
+                <p className="font-bold">Tài khoản chờ duyệt</p>
+                <p>{pendingMessage}</p>
+                <p className="mt-2 text-sm">
+                  Vui lòng liên hệ quản trị viên để kích hoạt tài khoản của bạn.
+                  Bạn có thể thử đăng nhập lại sau khi tài khoản được duyệt.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -202,6 +278,20 @@ const Login = () => {
               width="100%"
             />
           </div>
+        </div>
+
+        {/* Thông tin thêm dựa trên vai trò */}
+        <div className="mt-6 text-center text-sm text-gray-600">
+          {userRole === "teacher" ? (
+            <p>
+              Tài khoản giảng viên sẽ được admin xác nhận trước khi sử dụng.
+            </p>
+          ) : (
+            <p>
+              Sinh viên mới sẽ được hướng dẫn đăng ký thông tin và dữ liệu khuôn
+              mặt.
+            </p>
+          )}
         </div>
       </div>
     </div>

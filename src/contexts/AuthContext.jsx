@@ -124,17 +124,43 @@ export const AuthProvider = ({ children }) => {
     return currentUser.role === "admin";
   };
 
+  // Kiểm tra quyền giảng viên
+  const isTeacher = () => {
+    if (!currentUser) return false;
+    return currentUser.role === "teacher";
+  };
+
+  // Kiểm tra xem giảng viên đã hoàn thành thông tin cá nhân chưa
+  const hasTeacherProfile = async () => {
+    if (!isTeacher()) return false;
+
+    try {
+      const response = await axios.get(
+        `/api/teachers/profile/${currentUser._id}`
+      );
+      return !!response.data;
+    } catch (error) {
+      console.error("Error checking teacher profile:", error);
+      return false;
+    }
+  };
+
   // Kiểm tra tài khoản có active không
   const isActive = () => {
     if (!currentUser) return false;
-    return currentUser.status === "active";
+    return (
+      currentUser.status === "active" || currentUser.status === "temporary"
+    );
   };
 
   // Đăng nhập bằng Google
-  const loginWithGoogle = async (googleToken) => {
+  const loginWithGoogle = async (googleToken, role = "teacher") => {
     try {
-      console.log("Attempting Google login with token");
-      const response = await axios.post("/api/auth/google", { googleToken });
+      console.log("Attempting Google login with token for role:", role);
+      const response = await axios.post("/api/auth/google", {
+        googleToken,
+        role,
+      });
       console.log("Google login API response:", response.data);
 
       // Lưu token và set current user nếu đăng nhập thành công
@@ -165,7 +191,9 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     isAdmin,
+    isTeacher,
     isActive,
+    hasTeacherProfile,
     registerAdmin,
     loginWithGoogle,
   };

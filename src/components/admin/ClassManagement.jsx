@@ -6,6 +6,7 @@ import axios from "../../config/axios";
 const ClassManagement = () => {
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -16,20 +17,30 @@ const ClassManagement = () => {
     description: "",
     startDate: "",
     totalSessions: "",
+    mainClass: false,
+    department: "",
+    classroom: {
+      room: "",
+      floor: "",
+      building: "",
+    },
   });
   const [selectedTeacher, setSelectedTeacher] = useState("");
 
-  // Fetch classes and teachers
+  // Fetch classes, teachers and departments
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [classesResponse, teachersResponse] = await Promise.all([
-          axios.get("/api/classes"),
-          axios.get("/api/admin/teachers"),
-        ]);
+        const [classesResponse, teachersResponse, departmentsResponse] =
+          await Promise.all([
+            axios.get("/api/classes"),
+            axios.get("/api/admin/teachers"),
+            axios.get("/api/departments"),
+          ]);
         setClasses(classesResponse.data);
         setTeachers(teachersResponse.data);
+        setDepartments(departmentsResponse.data);
       } catch (error) {
         console.error("Error fetching data:", error);
         toast.error("Không thể tải dữ liệu");
@@ -43,11 +54,23 @@ const ClassManagement = () => {
 
   // Handle form change
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    const { name, value, type, checked } = e.target;
+
+    if (name.startsWith("classroom.")) {
+      const field = name.split(".")[1];
+      setFormData((prev) => ({
+        ...prev,
+        classroom: {
+          ...prev.classroom,
+          [field]: value,
+        },
+      }));
+    } else {
+      setFormData((prev) => ({
+        ...prev,
+        [name]: type === "checkbox" ? checked : value,
+      }));
+    }
   };
 
   // Open edit class modal
@@ -58,6 +81,13 @@ const ClassManagement = () => {
       description: classItem.description || "",
       startDate: new Date(classItem.startDate).toISOString().split("T")[0],
       totalSessions: classItem.totalSessions,
+      mainClass: classItem.mainClass || false,
+      department: classItem.department || "",
+      classroom: {
+        room: classItem.classroom?.room || "",
+        floor: classItem.classroom?.floor || "",
+        building: classItem.classroom?.building || "",
+      },
     });
     setShowEditModal(true);
   };
@@ -158,6 +188,30 @@ const ClassManagement = () => {
     return teacher ? teacher.name : "Không xác định";
   };
 
+  // Get department name by ID
+  const getDepartmentName = (departmentId) => {
+    if (!departmentId) return "-";
+    const department = departments.find((d) => d._id === departmentId);
+    return department ? department.name : "Không xác định";
+  };
+
+  // Format classroom info
+  const formatClassroom = (classroom) => {
+    if (
+      !classroom ||
+      (!classroom.room && !classroom.floor && !classroom.building)
+    ) {
+      return "-";
+    }
+
+    const parts = [];
+    if (classroom.room) parts.push(`Phòng ${classroom.room}`);
+    if (classroom.floor) parts.push(`Tầng ${classroom.floor}`);
+    if (classroom.building) parts.push(`Tòa ${classroom.building}`);
+
+    return parts.join(", ");
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-6">
@@ -206,6 +260,12 @@ const ClassManagement = () => {
             )}
           </button>
           <Link
+            to="/admin/departments"
+            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          >
+            Quản lý khoa
+          </Link>
+          <Link
             to="/admin"
             className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300"
           >
@@ -231,6 +291,12 @@ const ClassManagement = () => {
                   Giảng viên
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Khoa
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Phòng học
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Ngày bắt đầu
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -248,7 +314,7 @@ const ClassManagement = () => {
               {classes.length === 0 ? (
                 <tr>
                   <td
-                    colSpan="6"
+                    colSpan="8"
                     className="px-6 py-4 text-center text-gray-500"
                   >
                     Không có lớp học nào
@@ -266,11 +332,22 @@ const ClassManagement = () => {
                           {classItem.description}
                         </div>
                       )}
+                      {classItem.mainClass && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 ml-2">
+                          Lớp chính
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-500">
                         {getTeacherName(classItem.teacher)}
                       </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {getDepartmentName(classItem.department)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatClassroom(classItem.classroom)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {new Date(classItem.startDate).toLocaleDateString(
@@ -308,24 +385,46 @@ const ClassManagement = () => {
       {/* Modal chỉnh sửa lớp học */}
       {showEditModal && currentClass && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
             <h2 className="text-xl font-bold mb-4">
               Chỉnh sửa lớp học: {currentClass.name}
             </h2>
             <form onSubmit={handleUpdateClass}>
-              <div className="mb-4">
-                <label className="block text-gray-700 text-sm font-bold mb-2">
-                  Tên lớp
-                </label>
-                <input
-                  type="text"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="mb-4">
+                  <label className="block text-gray-700 text-sm font-bold mb-2">
+                    Tên lớp
+                  </label>
+                  <input
+                    type="text"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleChange}
+                    className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-gray-700 text-sm font-bold mb-2">
+                    Khoa
+                  </label>
+                  <select
+                    name="department"
+                    value={formData.department}
+                    onChange={handleChange}
+                    className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">-- Chọn khoa --</option>
+                    {departments.map((department) => (
+                      <option key={department._id} value={department._id}>
+                        {department.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
+
               <div className="mb-4">
                 <label className="block text-gray-700 text-sm font-bold mb-2">
                   Mô tả (tùy chọn)
@@ -335,36 +434,103 @@ const ClassManagement = () => {
                   value={formData.description}
                   onChange={handleChange}
                   className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  rows="3"
+                  rows="2"
                 ></textarea>
               </div>
-              <div className="mb-4">
-                <label className="block text-gray-700 text-sm font-bold mb-2">
-                  Ngày bắt đầu
-                </label>
-                <input
-                  type="date"
-                  name="startDate"
-                  value={formData.startDate}
-                  onChange={handleChange}
-                  className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="mb-4">
+                  <label className="block text-gray-700 text-sm font-bold mb-2">
+                    Ngày bắt đầu
+                  </label>
+                  <input
+                    type="date"
+                    name="startDate"
+                    value={formData.startDate}
+                    onChange={handleChange}
+                    className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-gray-700 text-sm font-bold mb-2">
+                    Số buổi học
+                  </label>
+                  <input
+                    type="number"
+                    name="totalSessions"
+                    value={formData.totalSessions}
+                    onChange={handleChange}
+                    min="1"
+                    className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
               </div>
-              <div className="mb-6">
-                <label className="block text-gray-700 text-sm font-bold mb-2">
-                  Số buổi học
-                </label>
-                <input
-                  type="number"
-                  name="totalSessions"
-                  value={formData.totalSessions}
-                  onChange={handleChange}
-                  min="1"
-                  className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
+
+              <div className="mb-4 border-t border-gray-200 pt-4">
+                <h3 className="text-md font-bold mb-2">Thông tin phòng học</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-gray-700 text-sm font-bold mb-2">
+                      Phòng
+                    </label>
+                    <input
+                      type="text"
+                      name="classroom.room"
+                      value={formData.classroom.room}
+                      onChange={handleChange}
+                      placeholder="Ví dụ: B1.01"
+                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 text-sm font-bold mb-2">
+                      Tầng
+                    </label>
+                    <input
+                      type="text"
+                      name="classroom.floor"
+                      value={formData.classroom.floor}
+                      onChange={handleChange}
+                      placeholder="Ví dụ: 2"
+                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 text-sm font-bold mb-2">
+                      Tòa nhà
+                    </label>
+                    <input
+                      type="text"
+                      name="classroom.building"
+                      value={formData.classroom.building}
+                      onChange={handleChange}
+                      placeholder="Ví dụ: A"
+                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
               </div>
+
+              <div className="mb-6 flex items-center">
+                <input
+                  type="checkbox"
+                  name="mainClass"
+                  id="mainClass"
+                  checked={formData.mainClass}
+                  onChange={handleChange}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-2"
+                />
+                <label
+                  htmlFor="mainClass"
+                  className="text-gray-700 text-sm font-bold"
+                >
+                  Đánh dấu là lớp chính
+                </label>
+              </div>
+
               <div className="flex justify-end space-x-3">
                 <button
                   type="button"

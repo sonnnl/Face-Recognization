@@ -8,26 +8,37 @@ const studentSchema = new mongoose.Schema({
   studentId: {
     type: String,
     required: true,
+    unique: true,
   },
-  class: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Class",
-    required: true,
+  email: {
+    type: String,
+    required: false,
+    unique: true,
+    sparse: true,
+  },
+  faceImage: {
+    type: String,
+    required: false,
   },
   faceFeatures: {
     type: [Number],
-    validate: {
-      validator: function (features) {
-        return features.length === 128;
-      },
-      message: (props) =>
-        `Face features must have exactly 128 values, got ${props.value.length}`,
-    },
-    required: true,
-  },
-  faceImage: {
-    type: String, // Lưu ảnh dưới dạng base64 string
     required: false,
+  },
+  classes: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Class",
+    },
+  ],
+  adminClass: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "AdminClass",
+    default: null,
+  },
+  mainClassId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Class",
+    default: null,
   },
   createdAt: {
     type: Date,
@@ -35,11 +46,45 @@ const studentSchema = new mongoose.Schema({
   },
 });
 
-// Bỏ index đơn cho studentId và thay bằng compound index
-studentSchema.index({ class: 1 });
-// Tạo compound index để đảm bảo mỗi studentId là duy nhất trong một lớp
-studentSchema.index({ studentId: 1, class: 1 }, { unique: true });
+// Middleware sau khi cập nhật hoặc lưu sinh viên, cập nhật số lượng sinh viên trong AdminClass
+studentSchema.post("save", async function () {
+  if (this.adminClass) {
+    try {
+      const AdminClass = mongoose.model("AdminClass");
+      await AdminClass.updateStudentCount(this.adminClass);
+    } catch (error) {
+      console.error("Error updating student count:", error);
+    }
+  }
+});
 
-const Student = mongoose.model("Student", studentSchema);
+// Middleware sau khi cập nhật adminClass của sinh viên
+studentSchema.post("findOneAndUpdate", async function (doc) {
+  if (!doc) return;
 
-export default Student;
+  // Nếu adminClass đã thay đổi, cập nhật cả adminClass cũ và mới
+  const update = this.getUpdate();
+  if (update && update.$set && update.$set.adminClass) {
+    try {
+      const AdminClass = mongoose.model("AdminClass");
+
+      // Cập nhật số lượng ở lớp mới
+      await AdminClass.updateStudentCount(update.$set.adminClass);
+
+      // Cập nhật số lượng ở lớp cũ nếu tồn tại
+      if (
+        doc.adminClass &&
+        doc.adminClass.toString() !== update.$set.adminClass.toString()
+      ) {
+        await AdminClass.updateStudentCount(doc.adminClass);
+      }
+    } catch (error) {
+      console.error(
+        "Error updating student counts after adminClass change:",
+        error
+      );
+    }
+  }
+});
+
+export default mongoose.model("Student", studentSchema);

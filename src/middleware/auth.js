@@ -25,7 +25,7 @@ export const auth = async (req, res, next) => {
     }
 
     // Kiểm tra tài khoản có active hay không
-    if (account.status !== "active") {
+    if (account.status !== "active" && account.status !== "temporary") {
       return res.status(403).json({
         message:
           "Tài khoản của bạn hiện không hoạt động. Vui lòng liên hệ quản trị viên.",
@@ -68,4 +68,6 @@ export const generateToken = (accountId) => {
   return jwt.sign({ id: accountId }, JWT_SECRET, { expiresIn: "7d" });
 };
 
-export default { auth, adminOnly, generateToken, JWT_SECRET };
+// Export các thành phần để sử dụng cả trong ESM và CommonJS
+const authExports = { auth, adminOnly, generateToken, JWT_SECRET };
+export default authExports;

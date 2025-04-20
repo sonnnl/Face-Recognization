@@ -6,13 +6,19 @@ const classSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
+  code: {
+    type: String,
+    required: false,
+    unique: true,
+    sparse: true,
+  },
   description: {
     type: String,
     required: false,
   },
   teacher: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Teacher",
+    ref: "Account",
     required: true,
   },
   startDate: {
@@ -50,6 +56,31 @@ const classSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now,
+  },
+  isAdminClass: {
+    type: Boolean,
+    default: false,
+    description:
+      "Indicates if this is an administrative class (lớp quản lý) rather than a study class (lớp học)",
+  },
+  department: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Department",
+    default: null,
+  },
+  classroom: {
+    room: {
+      type: String,
+      default: "",
+    },
+    floor: {
+      type: String,
+      default: "",
+    },
+    building: {
+      type: String,
+      default: "",
+    },
   },
 });
 

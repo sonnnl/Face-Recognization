@@ -29,12 +29,12 @@ const accountSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ["admin", "teacher"],
+    enum: ["admin", "teacher", "student"],
     default: "teacher",
   },
   status: {
     type: String,
-    enum: ["active", "pending", "blocked"],
+    enum: ["active", "pending", "blocked", "temporary"],
     default: "active", // Admin vẫn mặc định là active
   },
   provider: {
@@ -49,6 +49,12 @@ const accountSchema = new mongoose.Schema({
   lastLogin: {
     type: Date,
     default: Date.now,
+  },
+  // Thêm tham chiếu đến Student nếu là tài khoản sinh viên
+  studentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Student",
+    default: null,
   },
 });
 

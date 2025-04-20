@@ -12,9 +12,11 @@ import {
 } from "@heroicons/react/24/solid";
 import { useAuth } from "../contexts/AuthContext";
 import { toast } from "react-toastify";
+import { SiGoogleclassroom } from "react-icons/si";
+import { CameraIcon, ClockIcon } from "@heroicons/react/24/outline";
 
 function Navbar() {
-  const { currentUser, logout, isAdmin } = useAuth();
+  const { currentUser, logout, isAdmin, isTeacher } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -27,6 +29,40 @@ function Navbar() {
       toast.error("Có lỗi xảy ra khi đăng xuất");
     }
   };
+
+  // Teacher Menu
+  const teacherMenu = [
+    {
+      text: "Lớp học",
+      path: "/classes",
+      icon: <SiGoogleclassroom className="w-5 h-5" />,
+      tooltip: "Quản lý lớp học",
+    },
+    {
+      text: "Điểm danh",
+      path: "/attendance",
+      icon: <CameraIcon className="w-5 h-5" />,
+      tooltip: "Điểm danh sinh viên",
+    },
+    {
+      text: "Lớp quản lý",
+      path: "/admin/admin-classes",
+      icon: <UserGroupIcon className="w-5 h-5" />,
+      tooltip: "Quản lý lớp hành chính",
+    },
+    {
+      text: "Sinh viên",
+      path: "/students",
+      icon: <AcademicCapIcon className="w-5 h-5" />,
+      tooltip: "Danh sách sinh viên",
+    },
+    {
+      text: "Lịch sử điểm danh",
+      path: "/history",
+      icon: <ClockIcon className="w-5 h-5" />,
+      tooltip: "Lịch sử điểm danh",
+    },
+  ];
 
   // Menu cho admin
   const adminMenu = () => (
@@ -67,53 +103,35 @@ function Navbar() {
   );
 
   // Menu cho giảng viên
-  const teacherMenu = () => (
+  const teacherMenuComponent = () => (
     <div className="flex items-center space-x-4">
-      <Link
-        to="/classes"
-        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
-      >
-        <HomeIcon className="h-5 w-5 mr-2" />
-        Lớp học
-      </Link>
-      <Link
-        to="/attendance"
-        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
-      >
-        <UserGroupIcon className="h-5 w-5 mr-2" />
-        Điểm danh
-      </Link>
-      <Link
-        to="/register"
-        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
-      >
-        <UserPlusIcon className="h-5 w-5 mr-2" />
-        Đăng ký sinh viên
-      </Link>
-      <Link
-        to="/history"
-        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
-      >
-        <ClipboardDocumentListIcon className="h-5 w-5 mr-2" />
-        Lịch sử điểm danh
-      </Link>
-      <Link
-        to="/students"
-        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
-      >
-        <UserGroupIcon className="h-5 w-5 mr-2" />
-        Danh sách sinh viên
-      </Link>
+      {teacherMenu.map((item, index) => (
+        <Link
+          key={index}
+          to={item.path}
+          className={`flex items-center px-4 py-2 text-gray-600 rounded-lg hover:bg-blue-50 hover:text-blue-600 ${
+            window.location.pathname === item.path
+              ? "bg-blue-50 text-blue-600"
+              : ""
+          }`}
+        >
+          <span className="text-lg mr-3">{item.icon}</span>
+          <span className="text-sm font-medium">{item.text}</span>
+        </Link>
+      ))}
+      <div className="flex items-center px-3 py-2 bg-blue-100 text-blue-800 rounded ml-2">
+        <UserIcon className="h-5 w-5 mr-2" />
+        <span className="font-semibold">
+          {currentUser?.name || "Giảng viên"}
+        </span>
+      </div>
       <button
         onClick={handleLogout}
-        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
+        className="flex items-center px-4 py-2 text-gray-600 rounded-lg hover:bg-blue-50 hover:text-blue-600"
       >
         <ArrowLeftOnRectangleIcon className="h-5 w-5 mr-2" />
-        Đăng xuất
+        <span className="text-sm font-medium">Đăng xuất</span>
       </button>
-      <span className="text-blue-600 font-semibold px-3 py-2">
-        {currentUser.name || currentUser.email}
-      </span>
     </div>
   );
 
@@ -134,7 +152,7 @@ function Navbar() {
             isAdmin() ? (
               adminMenu()
             ) : (
-              teacherMenu()
+              teacherMenuComponent()
             )
           ) : (
             <div className="flex items-center space-x-4">

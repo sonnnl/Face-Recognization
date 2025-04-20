@@ -1,10 +1,11 @@
 import React from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
 // Component bảo vệ các route yêu cầu xác thực
 const ProtectedRoute = ({ children, adminOnly = false }) => {
   const { currentUser, loading, isAdmin, isActive } = useAuth();
+  const location = useLocation();
 
   // Đang kiểm tra trạng thái đăng nhập
   if (loading) {
@@ -37,7 +38,13 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
   }
 
   // Nếu route yêu cầu quyền admin nhưng người dùng không phải admin
-  if (adminOnly && !isAdmin()) {
+  // Ngoại lệ: Cho phép giảng viên truy cập trang admin-classes
+  const isAdminClassesPath =
+    location.pathname === "/admin/admin-classes" ||
+    location.pathname === "/admin-classes" ||
+    location.pathname.startsWith("/admin/admin-classes/"); // Cho phép cả trang chi tiết
+
+  if (adminOnly && !isAdmin() && !isAdminClassesPath) {
     return <Navigate to="/classes" replace />;
   }
 
