@@ -9,9 +9,16 @@ import {
   FaUsers,
   FaChalkboardTeacher,
 } from "react-icons/fa";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { useAuth } from "../../contexts/AuthContext";
 
-const AdminClassManagement = () => {
+const AdminClassManagement = ({ isTeacherView = false }) => {
+  const { currentUser, isAdmin } = useAuth();
+  const location = useLocation();
+  const isTeacherViewMode =
+    isTeacherView ||
+    (!isAdmin() && location.pathname === "/teacher/admin-classes");
+
   const [adminClasses, setAdminClasses] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [teachers, setTeachers] = useState([]);
@@ -27,12 +34,14 @@ const AdminClassManagement = () => {
     entryYear: new Date().getFullYear(),
     description: "",
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Fetch admin classes, departments, and teachers
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
+        // Fetch all data in parallel
         const [adminClassesResponse, departmentsResponse, teachersResponse] =
           await Promise.all([
             axios.get("/api/admin-classes"),
@@ -40,20 +49,118 @@ const AdminClassManagement = () => {
             axios.get("/api/admin/teachers"),
           ]);
 
-        setAdminClasses(adminClassesResponse.data);
-        setDepartments(departmentsResponse.data);
-
-        // Filter only teacher accounts (not admins)
+        // Lọc chỉ lấy tài khoản giảng viên (không phải admin)
         const teacherAccounts = teachersResponse.data.filter(
           (account) => account.role === "teacher"
         );
         setTeachers(teacherAccounts);
+        setDepartments(departmentsResponse.data);
+
+        // Xử lý dữ liệu lớp học để đảm bảo thông tin giảng viên đầy đủ
+        let processedClasses = adminClassesResponse.data;
+
+        // Get all pending students for all classes in a single request
+        let pendingCountsByClass = {};
+        try {
+          // Thử gọi endpoint mới trước
+          let pendingResponse;
+          let pendingData;
+
+          try {
+            pendingResponse = await axios.get(
+              "/api/admin-classes/all-student-approvals"
+            );
+            pendingData = pendingResponse.data;
+          } catch (approvalError) {
+            console.error(
+              "Error using new student-approvals endpoint:",
+              approvalError
+            );
+            console.log("Falling back to legacy endpoint");
+            // Nếu lỗi, sử dụng endpoint cũ
+            pendingResponse = await axios.get(
+              "/api/admin-classes/all-pending-students"
+            );
+            pendingData = pendingResponse.data;
+          }
+
+          // Create a map of class ID to pending count
+          pendingData.forEach((item) => {
+            if (!pendingCountsByClass[item.adminClass]) {
+              pendingCountsByClass[item.adminClass] = 0;
+            }
+            pendingCountsByClass[item.adminClass]++;
+          });
+        } catch (error) {
+          console.error("Error fetching all pending students:", error);
+          // If this optimized approach fails, fall back to individual requests
+          pendingCountsByClass = await fetchPendingCountsIndividually(
+            processedClasses
+          );
+        }
+
+        // Add pending counts and process teacher info
+        const finalClasses = processedClasses.map((adminClass) => {
+          // Add pending count
+          const pendingCount = pendingCountsByClass[adminClass._id] || 0;
+
+          // Process teacher info
+          let updatedClass = {
+            ...adminClass,
+            pendingCount,
+          };
+
+          // Nếu có mainTeacher nhưng chỉ là ID, thêm thông tin đầy đủ từ danh sách giảng viên
+          if (
+            updatedClass.mainTeacher &&
+            typeof updatedClass.mainTeacher === "string"
+          ) {
+            const fullTeacherInfo = teacherAccounts.find(
+              (t) => t._id === updatedClass.mainTeacher
+            );
+            if (fullTeacherInfo) {
+              updatedClass.mainTeacher = {
+                _id: fullTeacherInfo._id,
+                name: fullTeacherInfo.name,
+                email: fullTeacherInfo.email,
+              };
+            }
+          }
+
+          return updatedClass;
+        });
+
+        setAdminClasses(finalClasses);
       } catch (error) {
         console.error("Error fetching data:", error);
         toast.error("Không thể tải dữ liệu");
       } finally {
         setLoading(false);
       }
+    };
+
+    // Helper function to fetch pending counts individually if batch approach fails
+    const fetchPendingCountsIndividually = async (classes) => {
+      const pendingCounts = {};
+
+      // Use Promise.all for parallel requests but handle individual failures
+      const pendingPromises = classes.map(async (adminClass) => {
+        try {
+          const response = await axios.get(
+            `/api/admin-classes/${adminClass._id}/student-approvals`
+          );
+          pendingCounts[adminClass._id] = response.data.length;
+        } catch (error) {
+          console.error(
+            `Error fetching pending students for class ${adminClass._id}:`,
+            error
+          );
+          pendingCounts[adminClass._id] = 0;
+        }
+      });
+
+      await Promise.all(pendingPromises);
+      return pendingCounts;
     };
 
     fetchData();
@@ -70,14 +177,18 @@ const AdminClassManagement = () => {
 
   // Open create modal
   const openCreateModal = () => {
+    // Nếu là giảng viên, tự động gán mainTeacher là ID của giảng viên hiện tại
+    const initialMainTeacher = isTeacherViewMode ? currentUser._id : "";
+
     setFormData({
       name: "",
       code: "",
       department: departments.length > 0 ? departments[0]._id : "",
-      mainTeacher: "", // No default teacher
+      mainTeacher: initialMainTeacher,
       entryYear: new Date().getFullYear(),
       description: "",
     });
+    setCurrentClass(null);
     setModalMode("create");
     setShowModal(true);
   };
@@ -100,41 +211,116 @@ const AdminClassManagement = () => {
   // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSubmitting(true);
 
     try {
-      if (
-        !formData.name ||
-        !formData.code ||
-        !formData.department ||
-        !formData.entryYear
-      ) {
-        toast.error("Vui lòng điền đầy đủ thông tin");
-        return;
+      const dataToSubmit = { ...formData };
+
+      // Đảm bảo trường mainTeacher được gửi đi đúng
+      // Khi không chọn giảng viên (giá trị rỗng), gửi giá trị null
+      if (dataToSubmit.mainTeacher === "") {
+        dataToSubmit.mainTeacher = null;
       }
 
+      // Nếu là chế độ xem giảng viên, đặt mainTeacher là ID của giảng viên hiện tại
+      if (isTeacherViewMode && modalMode === "create") {
+        dataToSubmit.mainTeacher = currentUser._id;
+      }
+
+      console.log("Dữ liệu gửi đi:", {
+        ...dataToSubmit,
+        mainTeacher: dataToSubmit.mainTeacher, // Để kiểm tra giá trị, kiểu dữ liệu
+      });
+
+      let response;
       if (modalMode === "create") {
-        // Create new admin class
-        const response = await axios.post("/api/admin-classes", formData);
-        setAdminClasses((prev) => [...prev, response.data]);
-        toast.success("Tạo lớp quản lý thành công");
+        // Tạo lớp mới
+        response = await axios.post("/api/admin-classes", dataToSubmit);
+        console.log("Phản hồi từ server (create):", response.data);
+        toast.success("Tạo lớp thành công!");
+
+        // Xử lý dữ liệu trả về
+        let newClass = response.data;
+
+        // Đảm bảo thông tin giảng viên và khoa đầy đủ
+        if (newClass.department && typeof newClass.department === "string") {
+          const departmentInfo = departments.find(
+            (d) => d._id === newClass.department
+          );
+          if (departmentInfo) {
+            newClass.department = departmentInfo;
+          }
+        }
+
+        if (newClass.mainTeacher && typeof newClass.mainTeacher === "string") {
+          const teacherInfo = teachers.find(
+            (t) => t._id === newClass.mainTeacher
+          );
+          if (teacherInfo) {
+            newClass.mainTeacher = {
+              _id: teacherInfo._id,
+              name: teacherInfo.name,
+              email: teacherInfo.email,
+            };
+          }
+        }
+
+        // Cập nhật state
+        setAdminClasses((prev) => [...prev, newClass]);
       } else {
-        // Update existing admin class
-        const response = await axios.put(
+        // Cập nhật lớp
+        response = await axios.put(
           `/api/admin-classes/${currentClass._id}`,
-          formData
+          dataToSubmit
         );
+        console.log("Phản hồi từ server (update):", response.data);
+        toast.success("Cập nhật lớp thành công!");
+
+        // Xử lý dữ liệu trả về
+        let updatedClass = response.data.adminClass;
+
+        // Đảm bảo thông tin giảng viên và khoa đầy đủ
+        if (
+          updatedClass.department &&
+          typeof updatedClass.department === "string"
+        ) {
+          const departmentInfo = departments.find(
+            (d) => d._id === updatedClass.department
+          );
+          if (departmentInfo) {
+            updatedClass.department = departmentInfo;
+          }
+        }
+
+        if (
+          updatedClass.mainTeacher &&
+          typeof updatedClass.mainTeacher === "string"
+        ) {
+          const teacherInfo = teachers.find(
+            (t) => t._id === updatedClass.mainTeacher
+          );
+          if (teacherInfo) {
+            updatedClass.mainTeacher = {
+              _id: teacherInfo._id,
+              name: teacherInfo.name,
+              email: teacherInfo.email,
+            };
+          }
+        }
+
+        // Cập nhật state
         setAdminClasses((prev) =>
-          prev.map((cls) =>
-            cls._id === currentClass._id ? response.data.adminClass : cls
-          )
+          prev.map((cls) => (cls._id === currentClass._id ? updatedClass : cls))
         );
-        toast.success("Cập nhật lớp quản lý thành công");
       }
 
+      // Đóng modal sau khi hoàn thành
       setShowModal(false);
     } catch (error) {
       console.error("Error saving admin class:", error);
       toast.error(error.response?.data?.message || "Lỗi khi lưu lớp quản lý");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -224,8 +410,11 @@ const AdminClassManagement = () => {
                 adminClasses.map((adminClass) => (
                   <tr key={adminClass._id}>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
+                      <div className="text-sm font-medium text-gray-900 flex items-center">
                         {adminClass.name}
+                        {adminClass.pendingCount > 0 && (
+                          <span className="ml-2 w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
+                        )}
                       </div>
                       {adminClass.description && (
                         <div className="text-sm text-gray-500">
@@ -240,8 +429,10 @@ const AdminClassManagement = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        {adminClass.department.name ||
-                          getDepartmentName(adminClass.department)}
+                        {adminClass.department &&
+                        typeof adminClass.department === "object"
+                          ? adminClass.department.name
+                          : getDepartmentName(adminClass.department)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -262,8 +453,16 @@ const AdminClassManagement = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {adminClass.studentCount}
+                      <div className="text-sm text-gray-900 flex items-center">
+                        <span className="font-medium">
+                          {adminClass.studentCount || 0}
+                        </span>
+                        {adminClass.pendingCount > 0 && (
+                          <span className="ml-2 bg-yellow-200 text-yellow-800 px-2 py-0.5 rounded-full text-xs font-semibold flex items-center">
+                            +{adminClass.pendingCount} chờ duyệt
+                            <span className="inline-block animate-pulse bg-yellow-500 w-2 h-2 rounded-full ml-1"></span>
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -274,18 +473,27 @@ const AdminClassManagement = () => {
                         <FaEdit className="inline" /> Sửa
                       </button>
                       <Link
-                        to={`/admin/admin-classes/${adminClass._id}/students`}
+                        to={`${
+                          isTeacherViewMode ? "/teacher" : "/admin"
+                        }/admin-classes/${adminClass._id}/students`}
                         className="text-blue-600 hover:text-blue-900 mr-4"
                       >
                         <FaUsers className="inline" /> Sinh viên
                       </Link>
-                      <button
-                        onClick={() => handleDelete(adminClass._id)}
-                        className="text-red-600 hover:text-red-900"
-                        disabled={adminClass.studentCount > 0}
-                      >
-                        <FaTrash className="inline" /> Xóa
-                      </button>
+                      {!isTeacherViewMode && (
+                        <button
+                          onClick={() => handleDelete(adminClass._id)}
+                          className="text-red-600 hover:text-red-900"
+                          disabled={adminClass.studentCount > 0}
+                          title={
+                            adminClass.studentCount > 0
+                              ? "Không thể xóa lớp có sinh viên"
+                              : "Xóa lớp"
+                          }
+                        >
+                          <FaTrash className="inline" /> Xóa
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -362,28 +570,38 @@ const AdminClassManagement = () => {
                     </select>
                   </div>
 
-                  <div className="mb-4">
-                    <label className="block text-gray-700 text-sm font-bold mb-2">
-                      Giảng viên chủ nhiệm
-                    </label>
-                    <select
-                      name="mainTeacher"
-                      value={formData.mainTeacher}
-                      onChange={handleChange}
-                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-                    >
-                      <option value="">-- Chọn giảng viên chủ nhiệm --</option>
-                      {teachers.map((teacher) => (
-                        <option key={teacher._id} value={teacher._id}>
-                          {teacher.name} ({teacher.email})
+                  {/* Trường chọn giảng viên chủ nhiệm - Chỉ hiển thị nếu là admin */}
+                  {!isTeacherViewMode && (
+                    <div className="mb-4">
+                      <label className="block text-gray-700 text-sm font-bold mb-2">
+                        Giảng viên chủ nhiệm{" "}
+                        {modalMode === "create" && (
+                          <span className="text-gray-500 font-normal">
+                            (tùy chọn)
+                          </span>
+                        )}
+                      </label>
+                      <select
+                        name="mainTeacher"
+                        value={formData.mainTeacher}
+                        onChange={handleChange}
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                      >
+                        <option value="">
+                          -- Chọn giảng viên chủ nhiệm --
                         </option>
-                      ))}
-                    </select>
-                    <p className="text-sm text-gray-500 mt-1">
-                      Giảng viên chủ nhiệm sẽ có quyền quản lý sinh viên trong
-                      lớp này
-                    </p>
-                  </div>
+                        {teachers.map((teacher) => (
+                          <option key={teacher._id} value={teacher._id}>
+                            {teacher.name} ({teacher.email})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Giảng viên chủ nhiệm sẽ có quyền quản lý sinh viên trong
+                        lớp này
+                      </p>
+                    </div>
+                  )}
 
                   <div className="mb-4">
                     <label className="block text-gray-700 text-sm font-bold mb-2">

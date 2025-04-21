@@ -35,7 +35,7 @@ const accountSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ["active", "pending", "blocked", "temporary"],
-    default: "active", // Admin vẫn mặc định là active
+    default: "active",
   },
   provider: {
     type: String,
@@ -55,6 +55,39 @@ const accountSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Student",
     default: null,
+  },
+  // Thông tin tạm thời cho sinh viên đang chờ phê duyệt
+  pendingStudentInfo: {
+    studentIdNumber: {
+      type: String,
+      required: false,
+    },
+    adminClass: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AdminClass",
+      required: false,
+    },
+    gender: {
+      type: String,
+      enum: ["male", "female"],
+      default: "male",
+    },
+    phone: {
+      type: String,
+      required: false,
+    },
+    address: {
+      type: String,
+      required: false,
+    },
+    faceImage: {
+      type: String,
+      required: false,
+    },
+    faceFeatures: {
+      type: [Number],
+      required: false,
+    },
   },
 });
 

@@ -54,14 +54,91 @@ const TeacherRegister = () => {
   const handleCancel = async () => {
     if (
       window.confirm(
-        "Bạn có chắc muốn hủy quá trình đăng ký? Mọi dữ liệu sẽ bị xóa."
+        "Bạn có chắc muốn hủy quá trình đăng ký? Tài khoản của bạn sẽ bị xóa và bạn có thể đăng nhập lại với vai trò khác."
       )
     ) {
-      console.log("Bắt đầu quá trình hủy đăng ký giảng viên");
+      try {
+        console.log("Bắt đầu quá trình hủy đăng ký giảng viên");
+        setLoading(true);
 
-      // Sử dụng logout() thay vì xóa thủ công
-      toast.success("Đã hủy đăng ký thành công");
-      logout();
+        // Lấy token từ localStorage để đảm bảo xác thực
+        const token = localStorage.getItem("token");
+        if (!token) {
+          console.error("Không tìm thấy token xác thực");
+          toast.error("Bạn cần đăng nhập lại để thực hiện thao tác này");
+          logout();
+          return;
+        }
+
+        try {
+          // Gửi yêu cầu xóa tài khoản lên server với header xác thực rõ ràng
+          await axios.delete("/api/teachers/cancel-registration", {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+
+          // Nếu thành công, hiển thị thông báo và đăng xuất
+          toast.success("Đã hủy đăng ký thành công. Tài khoản đã được xóa.");
+          logout();
+        } catch (error) {
+          // Nếu bị lỗi 404, chỉ cần thông báo và đăng xuất
+          if (error.response && error.response.status === 404) {
+            console.error("API endpoint không tồn tại:", error.response.data);
+            toast.info(
+              "Đã ghi nhận yêu cầu hủy đăng ký. Bạn sẽ được đăng xuất."
+            );
+
+            // Trong trường hợp này, không có API để xóa tài khoản, ta chỉ cho phép người dùng đăng xuất
+            // và hệ thống sẽ xóa tài khoản sau bằng công cụ quản trị
+            localStorage.removeItem("account");
+            logout();
+            return;
+          }
+
+          // Xử lý các lỗi khác
+          throw error; // Ném lỗi để xử lý ở catch block bên ngoài
+        }
+      } catch (error) {
+        console.error("Error canceling registration:", error);
+
+        // Xử lý các loại lỗi cụ thể
+        if (error.response) {
+          // Lỗi từ phản hồi server
+          console.error(
+            "Server response error:",
+            error.response.status,
+            error.response.data
+          );
+
+          if (error.response.status === 404) {
+            toast.error(
+              "Không thể xóa tài khoản qua API. Hãy liên hệ quản trị viên."
+            );
+          } else if (error.response.status === 401) {
+            toast.error("Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.");
+          } else {
+            toast.error(
+              error.response.data.message ||
+                "Có lỗi xảy ra khi hủy đăng ký. Vui lòng thử lại."
+            );
+          }
+        } else if (error.request) {
+          // Yêu cầu đã được gửi nhưng không nhận được phản hồi
+          console.error("No response from server:", error.request);
+          toast.error(
+            "Không nhận được phản hồi từ server. Vui lòng kiểm tra kết nối mạng."
+          );
+        } else {
+          // Lỗi khi thiết lập yêu cầu
+          toast.error("Có lỗi xảy ra khi hủy đăng ký. Vui lòng thử lại.");
+        }
+
+        // Vẫn đăng xuất trong trường hợp có lỗi để người dùng có thể đăng nhập lại
+        logout();
+      } finally {
+        setLoading(false);
+      }
     }
   };
 

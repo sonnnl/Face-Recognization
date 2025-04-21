@@ -46,7 +46,7 @@ function Navbar() {
     },
     {
       text: "Lớp quản lý",
-      path: "/admin/admin-classes",
+      path: "/teacher/admin-classes",
       icon: <UserGroupIcon className="w-5 h-5" />,
       tooltip: "Quản lý lớp hành chính",
     },
@@ -72,7 +72,7 @@ function Navbar() {
         className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
       >
         <HomeIcon className="h-5 w-5 mr-2" />
-        Dashboard
+        Trang chủ
       </Link>
       <Link
         to="/admin/teachers"

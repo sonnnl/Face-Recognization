@@ -1,1 +1,1 @@
-Cần khởi động lại server sau khi sửa schema
+"RESTART SERVER WITH CORS UPDATE" 

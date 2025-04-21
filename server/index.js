@@ -13,6 +13,7 @@ import Attendance from "../src/models/Attendance.js";
 import AdminClass from "../src/models/AdminClass.js";
 import Teacher from "../src/models/Teacher.js";
 import { auth, adminOnly, generateToken } from "../src/middleware/auth.js";
+import tempRoutes from "./temp_routes.js";
 
 // Thêm log để xác nhận model được load
 console.log("Loaded models:", {
@@ -27,6 +28,25 @@ console.log("Loaded models:", {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// CORS config
+
+app.use(
+  cors({
+    origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+app.get("/hello", (req, res) => {
+  res.send("Hello World");
+});
+// VERY BASIC PING ROUTE FOR TESTING
+app.get("/ping", (req, res) => {
+  console.log("Received request for /ping");
+  res.status(200).send("pong");
+});
 
 // Connect to MongoDB
 connectDB()
@@ -75,23 +95,35 @@ connectDB()
   });
 
 // Middleware
-app.use(
-  cors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://localhost:5173",
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  })
-);
 app.use(express.json());
+
+// Sử dụng các routes từ temp_routes.js
+app.use("/api", tempRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date() });
+});
+
+// TESTING ENDPOINT - Moved to beginning
+app.get("/api/test/:classId", async (req, res) => {
+  try {
+    const { classId } = req.params;
+    console.log(`TEST ENDPOINT Called for class: ${classId}`);
+
+    return res.json({
+      success: true,
+      message: "Test endpoint working!",
+      classId,
+    });
+  } catch (error) {
+    console.error("Test endpoint error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error in test endpoint",
+      error: error.message,
+    });
+  }
 });
 
 // Server status check
@@ -160,6 +192,339 @@ app.get("/api/db-check", async (req, res) => {
     });
   }
 });
+
+// IMPORTANT - API for pending students management (MOVED TO TOP)
+// API for admin/teacher to get pending students for a class
+app.get("/api/admin-classes/:id/student-approvals", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(
+      `[EARLY REGISTRATION] Getting pending students for class: ${id}`
+    );
+
+    // Validate class ID
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "ID lớp không hợp lệ" });
+    }
+
+    // Check if class exists
+    const adminClass = await AdminClass.findById(id);
+    if (!adminClass) {
+      return res.status(404).json({ message: "Không tìm thấy lớp quản lý" });
+    }
+
+    // Check permissions
+    if (
+      req.account.role !== "admin" &&
+      (!adminClass.mainTeacher ||
+        adminClass.mainTeacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền xem danh sách sinh viên chờ duyệt của lớp này",
+      });
+    }
+
+    // Tìm pending accounts liên quan đến lớp này
+    const pendingAccounts = await Account.find({
+      role: "student",
+      status: "pending",
+      "pendingStudentInfo.adminClass": id,
+    });
+
+    console.log(
+      `[EARLY REGISTRATION] Found ${pendingAccounts.length} pending students for class ${id}`
+    );
+
+    // Format response
+    const result = pendingAccounts.map((account) => {
+      return {
+        _id: account._id,
+        name: account.name,
+        studentId: account.pendingStudentInfo?.studentIdNumber || "N/A",
+        email: account.email,
+        phone: account.pendingStudentInfo?.phone || "N/A",
+        gender: account.pendingStudentInfo?.gender || "male",
+        faceImage: account.pendingStudentInfo?.faceImage || null,
+        faceFeatures: account.pendingStudentInfo?.faceFeatures || null,
+        createdAt: account.createdAt,
+        account: {
+          _id: account._id,
+          email: account.email,
+          status: account.status,
+          createdAt: account.createdAt,
+        },
+      };
+    });
+
+    return res.json(result);
+  } catch (error) {
+    console.error(
+      "[EARLY REGISTRATION] Error getting pending students:",
+      error
+    );
+    return res.status(500).json({
+      message: "Lỗi khi lấy danh sách sinh viên chờ duyệt",
+      error: error.message,
+    });
+  }
+});
+
+// Legacy API endpoint for backward compatibility - redirects to student-approvals endpoint
+app.get("/api/admin-classes/:id/pending-students", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[LEGACY ENDPOINT] Getting pending students for class: ${id}`);
+
+    // Validate class ID
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "ID lớp không hợp lệ" });
+    }
+
+    // Check if class exists
+    const adminClass = await AdminClass.findById(id);
+    if (!adminClass) {
+      return res.status(404).json({ message: "Không tìm thấy lớp quản lý" });
+    }
+
+    // Check permissions
+    if (
+      req.account.role !== "admin" &&
+      (!adminClass.mainTeacher ||
+        adminClass.mainTeacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message:
+          "Bạn không có quyền xem danh sách sinh viên chờ duyệt của lớp này",
+      });
+    }
+
+    // Find pending students for this class
+    const pendingStudents = await Student.find({
+      adminClass: id,
+      status: "pending",
+    }).populate({
+      path: "accountId",
+      select: "email status createdAt",
+    });
+
+    console.log(
+      `[LEGACY ENDPOINT] Found ${pendingStudents.length} pending students for class ${id}`
+    );
+
+    // Format response
+    const result = pendingStudents.map((student) => {
+      return {
+        _id: student._id,
+        name: student.name,
+        studentId: student.studentId,
+        email: student.email,
+        phone: student.phone || "N/A",
+        gender: student.gender,
+        faceImage: student.faceImage || null,
+        faceFeatures: student.faceFeatures || null,
+        createdAt: student.createdAt,
+        account: student.accountId,
+      };
+    });
+
+    return res.json(result);
+  } catch (error) {
+    console.error("[LEGACY ENDPOINT] Error getting pending students:", error);
+    return res.status(500).json({
+      message: "Lỗi khi lấy danh sách sinh viên chờ duyệt",
+      error: error.message,
+    });
+  }
+});
+
+// API for admin/teacher to approve a student
+app.put(
+  "/api/admin-classes/:classId/approve-student-new/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+      console.log(
+        `[EARLY REGISTRATION] Approving student: ${studentId} for class: ${classId}`
+      );
+
+      // Validate IDs
+      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+        return res.status(400).json({ message: "ID không hợp lệ" });
+      }
+
+      // Check if class exists
+      const adminClass = await AdminClass.findById(classId);
+      if (!adminClass) {
+        return res.status(404).json({ message: "Không tìm thấy lớp quản lý" });
+      }
+
+      // Check permissions
+      if (
+        req.account.role !== "admin" &&
+        (!adminClass.mainTeacher ||
+          adminClass.mainTeacher.toString() !== req.account._id.toString())
+      ) {
+        return res.status(403).json({
+          message: "Bạn không có quyền phê duyệt sinh viên của lớp này",
+        });
+      }
+
+      // Tìm tài khoản sinh viên chờ duyệt
+      const account = await Account.findById(studentId);
+      if (!account) {
+        return res
+          .status(404)
+          .json({ message: "Không tìm thấy tài khoản sinh viên" });
+      }
+
+      if (account.status !== "pending") {
+        return res.status(400).json({
+          message: "Tài khoản sinh viên này không ở trạng thái chờ duyệt",
+        });
+      }
+
+      if (
+        !account.pendingStudentInfo ||
+        !account.pendingStudentInfo.adminClass ||
+        account.pendingStudentInfo.adminClass.toString() !== classId
+      ) {
+        return res.status(400).json({
+          message: "Sinh viên này không thuộc lớp quản lý được chỉ định",
+        });
+      }
+
+      // Tạo bản ghi sinh viên mới từ thông tin trong pendingStudentInfo
+      const newStudent = new Student({
+        name: account.name,
+        studentId: account.pendingStudentInfo.studentIdNumber,
+        email: account.email,
+        phone: account.pendingStudentInfo.phone,
+        gender: account.pendingStudentInfo.gender,
+        address: account.pendingStudentInfo.address,
+        faceImage: account.pendingStudentInfo.faceImage,
+        faceFeatures: account.pendingStudentInfo.faceFeatures,
+        adminClass: classId,
+        mainClassId: classId,
+        accountId: account._id,
+        status: "approved",
+      });
+
+      // Lưu bản ghi sinh viên mới
+      const savedStudent = await newStudent.save();
+      console.log(
+        `[EARLY REGISTRATION] New student record created: ${savedStudent._id}`
+      );
+
+      // Cập nhật tài khoản
+      account.status = "active";
+      account.studentId = savedStudent._id;
+      await account.save();
+      console.log(
+        `[EARLY REGISTRATION] Account status updated to active: ${account._id}`
+      );
+
+      // Cập nhật số lượng sinh viên trong lớp
+      adminClass.studentCount = (adminClass.studentCount || 0) + 1;
+      await adminClass.save();
+
+      return res.json({
+        message: "Phê duyệt sinh viên thành công",
+        student: {
+          _id: savedStudent._id,
+          name: savedStudent.name,
+          studentId: savedStudent.studentId,
+          status: savedStudent.status,
+        },
+      });
+    } catch (error) {
+      console.error("[EARLY REGISTRATION] Error approving student:", error);
+      return res.status(500).json({
+        message: "Lỗi khi phê duyệt sinh viên",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// API for admin/teacher to reject a student
+app.put(
+  "/api/admin-classes/:classId/reject-student-new/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+      console.log(
+        `[EARLY REGISTRATION] Rejecting student: ${studentId} for class: ${classId}`
+      );
+
+      // Validate IDs
+      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+        return res.status(400).json({ message: "ID không hợp lệ" });
+      }
+
+      // Check if class exists
+      const adminClass = await AdminClass.findById(classId);
+      if (!adminClass) {
+        return res.status(404).json({ message: "Không tìm thấy lớp quản lý" });
+      }
+
+      // Check permissions
+      if (
+        req.account.role !== "admin" &&
+        (!adminClass.mainTeacher ||
+          adminClass.mainTeacher.toString() !== req.account._id.toString())
+      ) {
+        return res.status(403).json({
+          message: "Bạn không có quyền từ chối sinh viên của lớp này",
+        });
+      }
+
+      // Tìm tài khoản sinh viên
+      const account = await Account.findById(studentId);
+      if (!account) {
+        return res
+          .status(404)
+          .json({ message: "Không tìm thấy tài khoản sinh viên" });
+      }
+
+      if (account.status !== "pending") {
+        return res.status(400).json({
+          message: "Tài khoản này không ở trạng thái chờ duyệt",
+        });
+      }
+
+      if (
+        !account.pendingStudentInfo ||
+        !account.pendingStudentInfo.adminClass ||
+        account.pendingStudentInfo.adminClass.toString() !== classId
+      ) {
+        return res.status(400).json({
+          message: "Sinh viên này không thuộc lớp quản lý được chỉ định",
+        });
+      }
+
+      // Đặt trạng thái tài khoản thành blocked
+      account.status = "blocked";
+      await account.save();
+      console.log(
+        `[EARLY REGISTRATION] Account status updated to blocked: ${account._id}`
+      );
+
+      return res.json({
+        message: "Đã từ chối sinh viên thành công",
+        accountId: account._id,
+      });
+    } catch (error) {
+      console.error("[EARLY REGISTRATION] Error rejecting student:", error);
+      return res.status(500).json({
+        message: "Lỗi khi từ chối sinh viên",
+        error: error.message,
+      });
+    }
+  }
+);
 
 // Validate MongoDB ObjectID
 const isValidObjectId = (id) => {
@@ -668,6 +1033,132 @@ app.get("/api/students/:id", auth, async (req, res) => {
   }
 });
 
+// GET face image for student by ID (works for both approved students and pending accounts)
+app.get("/api/students/:id/face-image", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("Fetching face image for ID:", id);
+
+    if (!isValidObjectId(id)) {
+      console.log("Invalid ID format:", id);
+      return res.status(400).json({ message: "ID không hợp lệ" });
+    }
+
+    // Tìm trong bảng Student trước (sinh viên đã được phê duyệt)
+    let student = await Student.findById(id);
+
+    // Nếu không tìm thấy trong Student, tìm trong Account (đối với sinh viên chờ phê duyệt)
+    if (!student) {
+      const account = await Account.findById(id);
+
+      if (
+        !account ||
+        account.status !== "pending" ||
+        !account.pendingStudentInfo
+      ) {
+        return res
+          .status(404)
+          .json({ message: "Không tìm thấy dữ liệu khuôn mặt" });
+      }
+
+      // Lấy ảnh từ tài khoản pendingStudentInfo
+      const faceImage = account.pendingStudentInfo.faceImage;
+
+      if (!faceImage) {
+        return res.status(404).json({ message: "Không có dữ liệu khuôn mặt" });
+      }
+
+      return res.json({
+        faceImage,
+        studentId: account.pendingStudentInfo.studentIdNumber || "N/A",
+        studentName: account.name || "Unnamed Student",
+      });
+    }
+
+    // Lấy ảnh từ Student nếu tồn tại
+    if (!student.faceImage) {
+      return res.status(404).json({ message: "Không có dữ liệu khuôn mặt" });
+    }
+
+    res.json({
+      faceImage: student.faceImage,
+      studentId: student.studentId || "N/A",
+      studentName: student.name || "Unnamed Student",
+    });
+  } catch (error) {
+    console.error("Error fetching face image:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải ảnh khuôn mặt",
+      error: error.message,
+    });
+  }
+});
+
+// GET face features for student by ID (works for both approved students and pending accounts)
+app.get("/api/students/:id/face-features", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("Fetching face features for ID:", id);
+
+    if (!isValidObjectId(id)) {
+      console.log("Invalid ID format:", id);
+      return res.status(400).json({ message: "ID không hợp lệ" });
+    }
+
+    // Tìm trong bảng Student trước (sinh viên đã được phê duyệt)
+    let student = await Student.findById(id);
+
+    // Nếu không tìm thấy trong Student, tìm trong Account (đối với sinh viên chờ phê duyệt)
+    if (!student) {
+      const account = await Account.findById(id);
+
+      if (
+        !account ||
+        account.status !== "pending" ||
+        !account.pendingStudentInfo
+      ) {
+        return res
+          .status(404)
+          .json({ message: "Không tìm thấy dữ liệu đặc trưng khuôn mặt" });
+      }
+
+      // Lấy đặc trưng khuôn mặt từ tài khoản pendingStudentInfo
+      const faceFeatures = account.pendingStudentInfo.faceFeatures;
+
+      if (!faceFeatures || !faceFeatures.length) {
+        return res
+          .status(404)
+          .json({ message: "Không có dữ liệu đặc trưng khuôn mặt" });
+      }
+
+      return res.json({
+        faceFeatures,
+        studentId: account.pendingStudentInfo.studentIdNumber || "N/A",
+        studentName: account.name || "Unnamed Student",
+      });
+    }
+
+    // Lấy đặc trưng khuôn mặt từ Student nếu tồn tại
+    if (!student.faceFeatures || !student.faceFeatures.length) {
+      return res
+        .status(404)
+        .json({ message: "Không có dữ liệu đặc trưng khuôn mặt" });
+    }
+
+    res.json({
+      faceFeatures: student.faceFeatures,
+      studentId: student.studentId || "N/A",
+      studentName: student.name || "Unnamed Student",
+    });
+  } catch (error) {
+    console.error("Error fetching face features:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải đặc trưng khuôn mặt",
+      error: error.message,
+    });
+  }
+});
+
 // CREATE new student
 app.post("/api/students", auth, async (req, res) => {
   try {
@@ -888,17 +1379,17 @@ app.post("/api/students/register", auth, async (req, res) => {
       gender,
       phone,
       studentId,
-      adminClass,
+      mainClassId,
       faceImage,
       faceFeatures,
     } = req.body;
 
     console.log(
-      `Student registration request: ${name}, ID: ${studentId}, AdminClass: ${adminClass}`
+      `Student registration request: ${name}, ID: ${studentId}, MainClassId: ${mainClassId}`
     );
 
     // Validate required fields
-    if (!name || !studentId || !adminClass) {
+    if (!name || !studentId || !mainClassId) {
       return res.status(400).json({
         message:
           "Vui lòng cung cấp đầy đủ thông tin họ tên, mã sinh viên và lớp quản lý",
@@ -913,7 +1404,7 @@ app.post("/api/students/register", auth, async (req, res) => {
       });
     }
 
-    // Kiểm tra xem mã sinh viên đã tồn tại chưa
+    // Kiểm tra xem mã sinh viên đã tồn tại chưa trong Students collection
     const existingStudent = await Student.findOne({ studentId });
     if (existingStudent) {
       return res.status(400).json({
@@ -921,47 +1412,48 @@ app.post("/api/students/register", auth, async (req, res) => {
       });
     }
 
+    // Kiểm tra xem mã sinh viên đã tồn tại chưa trong tài khoản pending nào khác
+    const existingPendingAccount = await Account.findOne({
+      "pendingStudentInfo.studentIdNumber": studentId,
+      status: "pending",
+    });
+
+    if (existingPendingAccount) {
+      return res.status(400).json({
+        message: "Mã sinh viên này đã được đăng ký và đang chờ phê duyệt",
+      });
+    }
+
     // Kiểm tra lớp quản lý tồn tại
-    const adminClassObj = await AdminClass.findById(adminClass);
+    const adminClassObj = await AdminClass.findById(mainClassId);
     if (!adminClassObj) {
       return res.status(400).json({
         message: "Lớp quản lý không tồn tại",
       });
     }
 
-    // Tạo sinh viên mới
-    const student = new Student({
-      name,
-      email: req.account.email, // Lấy email từ tài khoản đã đăng nhập
-      studentId,
+    // Thay vì tạo sinh viên mới, lưu thông tin vào tài khoản
+    const account = await Account.findById(req.account._id);
+
+    // Lưu thông tin sinh viên vào trường pendingStudentInfo
+    account.pendingStudentInfo = {
+      studentIdNumber: studentId,
+      adminClass: mainClassId,
       gender: gender || "male",
       phone,
-      adminClass,
       faceImage,
       faceFeatures,
-      accountId: req.account._id, // Liên kết với tài khoản
-    });
+    };
 
-    // Lưu sinh viên vào database
-    await student.save();
-
-    // Cập nhật thông tin tài khoản và trạng thái
-    const account = await Account.findById(req.account._id);
-    account.studentId = student._id; // Liên kết tài khoản với sinh viên
-    account.status = "pending"; // Chuyển trạng thái từ temporary sang pending
+    // Chuyển trạng thái tài khoản sang pending
+    account.status = "pending";
     await account.save();
 
-    console.log(`Student registered successfully: ${student._id}`);
+    console.log(`Student registration info saved to account: ${account._id}`);
 
     res.status(201).json({
       message:
         "Đăng ký thông tin sinh viên thành công. Tài khoản của bạn đang chờ quản trị viên phê duyệt.",
-      student: {
-        _id: student._id,
-        name: student.name,
-        studentId: student.studentId,
-        adminClass: student.adminClass,
-      },
       isPending: true,
     });
   } catch (error) {
@@ -2620,28 +3112,37 @@ app.put("/api/admin/students/:id/reject", auth, async (req, res) => {
       return res.status(404).json({ message: "Không tìm thấy tài khoản" });
     }
 
-    // Tìm và xóa thông tin sinh viên liên quan
-    const student = await Student.findOne({ account: id });
-    if (student) {
-      console.log(`Xóa thông tin sinh viên ID: ${student._id}`);
-
-      // Cập nhật số lượng sinh viên trong lớp
-      if (student.class) {
-        await Class.findByIdAndUpdate(
-          student.class,
-          { $pull: { students: student._id } },
-          { new: true }
-        );
-        console.log(`Đã xóa sinh viên khỏi lớp ${student.class}`);
-      }
-
-      // Xóa sinh viên
-      await Student.findByIdAndDelete(student._id);
-    } else {
-      console.log(`Không tìm thấy thông tin sinh viên cho tài khoản: ${id}`);
+    // Kiểm tra xem tài khoản có phải đang pending không
+    if (account.status !== "pending") {
+      return res.status(400).json({
+        message: "Chỉ có thể từ chối tài khoản đang chờ duyệt",
+      });
     }
 
-    // Cập nhật trạng thái tài khoản
+    // Kiểm tra liên kết sinh viên hiện tại (cách cũ)
+    if (account.studentId) {
+      const student = await Student.findById(account.studentId);
+      if (student) {
+        console.log(`Xóa thông tin sinh viên ID: ${student._id}`);
+
+        // Xóa sinh viên khỏi các lớp học
+        if (student.classes && student.classes.length > 0) {
+          for (const classId of student.classes) {
+            await Class.findByIdAndUpdate(classId, {
+              $pull: { students: student._id },
+            });
+            console.log(`Đã xóa sinh viên khỏi lớp ${classId}`);
+          }
+        }
+
+        // Xóa sinh viên
+        await Student.findByIdAndDelete(student._id);
+      }
+    }
+
+    // Xóa thông tin tạm thời (cách mới)
+    account.pendingStudentInfo = null;
+    account.studentId = null;
     account.status = "blocked";
     await account.save();
 
@@ -3081,8 +3582,11 @@ app.get("/api/admin-classes", auth, async (req, res) => {
 
     let query = {};
 
-    // Nếu là giảng viên, chỉ hiển thị các lớp họ là chủ nhiệm
-    if (req.account && req.account.role === "teacher") {
+    // Kiểm tra query parameter "all"
+    const showAll = req.query.all === "true";
+
+    // Nếu là giảng viên và không yêu cầu xem tất cả, chỉ hiển thị các lớp họ là chủ nhiệm
+    if (req.account && req.account.role === "teacher" && !showAll) {
       console.log(
         `Teacher ${req.account.name} requesting their managed classes`
       );
@@ -3137,12 +3641,22 @@ app.get("/api/admin-classes/:id", auth, async (req, res) => {
   }
 });
 
-// Tạo lớp quản lý mới (chỉ admin)
-app.post("/api/admin-classes", auth, adminOnly, async (req, res) => {
+// Tạo lớp quản lý mới (giảng viên & admin)
+app.post("/api/admin-classes", auth, async (req, res) => {
   try {
+    console.log("Request body:", req.body); // Debug: Kiểm tra dữ liệu gửi lên
     const { name, code, department, entryYear, description, mainTeacher } =
       req.body;
-    console.log(`Creating new admin class: ${name}, code: ${code}`);
+    console.log(
+      `User ${req.account.name} (${req.account.role}) creating new admin class: ${name}, code: ${code}, mainTeacher: ${mainTeacher}`
+    );
+
+    // Chỉ cho phép admin và giảng viên tạo lớp quản lý
+    if (req.account.role !== "admin" && req.account.role !== "teacher") {
+      return res.status(403).json({
+        message: "Bạn không có quyền tạo lớp quản lý",
+      });
+    }
 
     // Validate required fields
     if (!name || !code || !department || !entryYear) {
@@ -3165,24 +3679,6 @@ app.post("/api/admin-classes", auth, adminOnly, async (req, res) => {
       });
     }
 
-    // Validate mainTeacher if provided
-    if (mainTeacher && !isValidObjectId(mainTeacher)) {
-      return res.status(400).json({
-        message: "ID giảng viên chủ nhiệm không hợp lệ",
-      });
-    }
-
-    // Check if main teacher exists (if provided)
-    if (mainTeacher) {
-      const teacherExists = await Account.findById(mainTeacher);
-      if (!teacherExists || teacherExists.role !== "teacher") {
-        return res.status(404).json({
-          message:
-            "Không tìm thấy giảng viên chủ nhiệm hoặc không có quyền giảng viên",
-        });
-      }
-    }
-
     // Check if class code already exists
     const existingClass = await AdminClass.findOne({ code });
     if (existingClass) {
@@ -3191,6 +3687,34 @@ app.post("/api/admin-classes", auth, adminOnly, async (req, res) => {
       });
     }
 
+    // Xử lý giá trị mainTeacher
+    let finalMainTeacher = null;
+
+    // Nếu mainTeacher được chỉ định và không phải null/undefined
+    if (mainTeacher) {
+      if (!isValidObjectId(mainTeacher)) {
+        return res.status(400).json({
+          message: "ID giảng viên chủ nhiệm không hợp lệ",
+        });
+      }
+
+      const teacherExists = await Account.findById(mainTeacher);
+      if (!teacherExists || teacherExists.role !== "teacher") {
+        return res.status(400).json({
+          message:
+            "Không tìm thấy giảng viên chủ nhiệm hoặc không có quyền giảng viên",
+        });
+      }
+
+      finalMainTeacher = mainTeacher;
+    }
+    // Giảng viên tạo lớp sẽ tự động trở thành chủ nhiệm nếu không chỉ định
+    else if (req.account.role === "teacher") {
+      finalMainTeacher = req.account._id;
+    }
+
+    console.log("Final mainTeacher value for new class:", finalMainTeacher); // Debug
+
     // Create new admin class
     const newAdminClass = new AdminClass({
       name,
@@ -3198,10 +3722,12 @@ app.post("/api/admin-classes", auth, adminOnly, async (req, res) => {
       department,
       entryYear: parseInt(entryYear),
       description: description || "",
-      mainTeacher: mainTeacher || null,
+      mainTeacher: finalMainTeacher,
     });
 
     const savedClass = await newAdminClass.save();
+
+    console.log("Saved class:", savedClass); // Debug
 
     // Populate department and mainTeacher for response
     const populatedClass = await AdminClass.findById(savedClass._id)
@@ -3226,8 +3752,11 @@ app.post("/api/admin-classes", auth, adminOnly, async (req, res) => {
 app.put("/api/admin-classes/:id", auth, adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
+    console.log("Update request body:", req.body); // Debug
     const { name, description, entryYear, mainTeacher } = req.body;
-    console.log(`Updating admin class with ID: ${id}`);
+    console.log(
+      `Updating admin class with ID: ${id}, mainTeacher: ${mainTeacher}`
+    );
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({
@@ -3242,7 +3771,7 @@ app.put("/api/admin-classes/:id", auth, adminOnly, async (req, res) => {
       });
     }
 
-    // Validate mainTeacher if provided
+    // Validate mainTeacher if not null or undefined
     if (mainTeacher && !isValidObjectId(mainTeacher)) {
       return res.status(400).json({
         message: "ID giảng viên chủ nhiệm không hợp lệ",
@@ -3264,9 +3793,16 @@ app.put("/api/admin-classes/:id", auth, adminOnly, async (req, res) => {
     if (name) adminClass.name = name;
     if (description !== undefined) adminClass.description = description;
     if (entryYear) adminClass.entryYear = parseInt(entryYear);
-    if (mainTeacher !== undefined) adminClass.mainTeacher = mainTeacher || null;
+
+    // Xử lý cập nhật mainTeacher
+    // Chỉ cập nhật nếu mainTeacher xuất hiện trong request (kể cả khi giá trị là null)
+    if (mainTeacher !== undefined) {
+      console.log("Setting mainTeacher to:", mainTeacher); // Debug
+      adminClass.mainTeacher = mainTeacher;
+    }
 
     const updatedClass = await adminClass.save();
+    console.log("Saved updated class:", updatedClass); // Debug
 
     // Populate department and mainTeacher for response
     const populatedClass = await AdminClass.findById(updatedClass._id)
@@ -3344,7 +3880,9 @@ app.delete("/api/admin-classes/:id", auth, adminOnly, async (req, res) => {
 app.get("/api/admin-classes/:id/students", auth, async (req, res) => {
   try {
     const { id } = req.params;
+    const { showPending } = req.query; // Thêm tham số query để hiển thị cả sinh viên pending nếu cần
     console.log(`Fetching students for admin class with ID: ${id}`);
+    console.log(`Show pending students: ${showPending ? "Yes" : "No"}`);
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({
@@ -3361,14 +3899,237 @@ app.get("/api/admin-classes/:id/students", auth, async (req, res) => {
     }
 
     // Tìm tất cả sinh viên thuộc lớp quản lý này
-    const students = await Student.find({ adminClass: id }).sort({ name: 1 });
+    const studentsQuery = Student.find({ adminClass: id }).sort({ name: 1 });
+    const allStudents = await studentsQuery;
 
-    console.log(`Found ${students.length} students in admin class ${id}`);
-    res.json(students);
+    // Nếu không yêu cầu hiển thị pending, lọc ra sinh viên có tài khoản đã active
+    if (!showPending) {
+      // Lấy danh sách tất cả ID sinh viên
+      const studentIds = allStudents.map((student) => student._id);
+
+      // Tìm tài khoản pending liên kết với các sinh viên này
+      const pendingAccounts = await Account.find({
+        studentId: { $in: studentIds },
+        status: "pending",
+      });
+
+      // Lấy ra ID của sinh viên có tài khoản pending
+      const pendingStudentIds = pendingAccounts
+        .map((account) =>
+          account.studentId ? account.studentId.toString() : null
+        )
+        .filter((id) => id !== null);
+
+      // Lọc ra những sinh viên không có trong danh sách pending
+      const activeStudents = allStudents.filter(
+        (student) => !pendingStudentIds.includes(student._id.toString())
+      );
+
+      console.log(
+        `Found ${allStudents.length} total students, ${activeStudents.length} active students in admin class ${id}`
+      );
+      return res.json(activeStudents);
+    }
+
+    console.log(
+      `Found ${allStudents.length} students in admin class ${id} (including pending)`
+    );
+    res.json(allStudents);
   } catch (error) {
     console.error("Error fetching students in admin class:", error);
     res.status(500).json({
       message: "Lỗi khi tải danh sách sinh viên trong lớp quản lý",
+      error: error.message,
+    });
+  }
+});
+
+// Lấy danh sách sinh viên chờ duyệt trong lớp quản lý (alias)
+app.get("/api/admin-classes/:id/students-pending", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(
+      `API (Alias): Fetching pending students for admin class with ID: ${id}`
+    );
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID lớp quản lý không hợp lệ",
+      });
+    }
+
+    // Kiểm tra xem lớp quản lý có tồn tại không
+    const adminClass = await AdminClass.findById(id);
+    if (!adminClass) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp quản lý",
+      });
+    }
+
+    // Kiểm tra quyền truy cập: chỉ admin hoặc giảng viên chủ nhiệm mới được xem
+    if (
+      req.account.role !== "admin" &&
+      (!adminClass.mainTeacher ||
+        adminClass.mainTeacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message: "Bạn không có quyền truy cập thông tin lớp quản lý này",
+      });
+    }
+
+    // Get all students in this admin class first
+    const students = await Student.find({ adminClass: id });
+
+    // No students in this class at all
+    if (students.length === 0) {
+      return res.json([]);
+    }
+
+    // Get student IDs for looking up in accounts
+    const studentIds = students.map((student) => student._id);
+
+    // Find all accounts that reference these students and are pending
+    const pendingAccounts = await Account.find({
+      studentId: { $in: studentIds },
+      status: "pending",
+    });
+
+    // Prepare result by combining student data with account data
+    const result = [];
+    for (const account of pendingAccounts) {
+      if (account.studentId) {
+        const student = students.find(
+          (s) => s._id.toString() === account.studentId.toString()
+        );
+        if (student) {
+          result.push({
+            ...student.toObject(),
+            account: {
+              _id: account._id,
+              email: account.email,
+              status: account.status,
+              createdAt: account.createdAt,
+            },
+          });
+        }
+      }
+    }
+
+    console.log(`Alias endpoint returning ${result.length} pending students`);
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching pending students (alias):", error);
+    res.status(500).json({
+      message: "Lỗi khi tải danh sách sinh viên chờ duyệt",
+      error: error.message,
+    });
+  }
+});
+
+// Lấy tất cả sinh viên chờ duyệt cho tất cả các lớp (endpoint mới)
+app.get("/api/admin-classes/all-pending-students", auth, async (req, res) => {
+  try {
+    console.log(`API: Fetching all pending students for all classes`);
+    console.log(
+      `User: ${req.account.name}, Role: ${req.account.role}, ID: ${req.account._id}`
+    );
+
+    // Nếu không phải admin, chỉ lấy sinh viên chờ duyệt cho các lớp mà giáo viên quản lý
+    let adminClassQuery = {};
+    if (req.account.role !== "admin") {
+      adminClassQuery.mainTeacher = req.account._id;
+    }
+
+    // Lấy danh sách lớp
+    const adminClasses = await AdminClass.find(adminClassQuery).select("_id");
+    const adminClassIds = adminClasses.map((c) => c._id);
+
+    // Tìm tài khoản sinh viên chờ duyệt thuộc các lớp này
+    const pendingAccounts = await Account.find({
+      role: "student",
+      status: "pending",
+      "pendingStudentInfo.adminClass": { $in: adminClassIds },
+    });
+
+    if (pendingAccounts.length === 0) {
+      console.log(`No pending student accounts found`);
+      return res.json([]);
+    }
+
+    // Format response with minimal data (for backward compatibility)
+    const result = pendingAccounts.map((account) => {
+      return {
+        _id: account._id,
+        adminClass: account.pendingStudentInfo?.adminClass,
+        accountId: account._id,
+      };
+    });
+
+    console.log(`Found ${result.length} pending students across all classes`);
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching all pending students:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải danh sách sinh viên chờ duyệt",
+      error: error.message,
+    });
+  }
+});
+
+// Endpoint mới - Lấy tất cả sinh viên chờ duyệt cho tất cả các lớp (student-approvals)
+app.get("/api/admin-classes/all-student-approvals", auth, async (req, res) => {
+  try {
+    console.log(`API: Fetching all student approvals for all classes`);
+    console.log(
+      `User: ${req.account.name}, Role: ${req.account.role}, ID: ${req.account._id}`
+    );
+
+    // Nếu không phải admin, chỉ lấy sinh viên chờ duyệt cho các lớp mà giáo viên quản lý
+    let adminClassQuery = {};
+    if (req.account.role !== "admin") {
+      adminClassQuery.mainTeacher = req.account._id;
+    }
+
+    // Lấy danh sách lớp
+    const adminClasses = await AdminClass.find(adminClassQuery).select("_id");
+    const adminClassIds = adminClasses.map((c) => c._id);
+
+    // Tìm tài khoản sinh viên chờ duyệt thuộc các lớp này
+    const pendingAccounts = await Account.find({
+      role: "student",
+      status: "pending",
+      "pendingStudentInfo.adminClass": { $in: adminClassIds },
+    });
+
+    console.log(
+      `Found ${pendingAccounts.length} pending students across all classes`
+    );
+
+    // Format response
+    const result = pendingAccounts.map((account) => {
+      return {
+        _id: account._id,
+        adminClass: account.pendingStudentInfo?.adminClass,
+        name: account.name,
+        studentId: account.pendingStudentInfo?.studentIdNumber || "N/A",
+        email: account.email,
+        phone: account.pendingStudentInfo?.phone || "N/A",
+        gender: account.pendingStudentInfo?.gender || "male",
+        account: {
+          _id: account._id,
+          email: account.email,
+          status: account.status,
+          createdAt: account.createdAt,
+        },
+        createdAt: account.createdAt,
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching all student approvals:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải danh sách sinh viên chờ duyệt",
       error: error.message,
     });
   }
@@ -3520,6 +4281,96 @@ app.delete(
   }
 );
 
+// Vô hiệu hóa hoặc kích hoạt lại sinh viên
+app.put(
+  "/api/admin-classes/:classId/students/:studentId/toggle-status",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+      console.log(
+        `User ${req.account.name} (${req.account.role}) toggling status for student ${studentId} in class ${classId}`
+      );
+
+      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID không hợp lệ",
+        });
+      }
+
+      // Kiểm tra xem lớp quản lý có tồn tại không
+      const adminClass = await AdminClass.findById(classId);
+      if (!adminClass) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp quản lý",
+        });
+      }
+
+      // Kiểm tra quyền hạn: Admin hoặc giảng viên chủ nhiệm của lớp này
+      if (
+        req.account.role !== "admin" &&
+        (!adminClass.mainTeacher ||
+          adminClass.mainTeacher.toString() !== req.account._id.toString())
+      ) {
+        return res.status(403).json({
+          message:
+            "Bạn không có quyền thay đổi trạng thái của sinh viên trong lớp này",
+        });
+      }
+
+      // Tìm sinh viên
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+        });
+      }
+
+      // Kiểm tra xem sinh viên có thuộc lớp quản lý này không
+      if (student.adminClass?.toString() !== classId) {
+        return res.status(400).json({
+          message: "Sinh viên không thuộc lớp quản lý này",
+        });
+      }
+
+      // Cập nhật trạng thái của sinh viên (đảo ngược trạng thái active)
+      student.active = !student.active;
+      await student.save();
+
+      // Cập nhật trạng thái tài khoản liên kết nếu có
+      if (student.accountId) {
+        const account = await Account.findById(student.accountId);
+        if (account) {
+          account.status = student.active ? "active" : "blocked";
+          await account.save();
+          console.log(
+            `Account status updated to ${account.status}: ${account._id}`
+          );
+        }
+      }
+
+      console.log(
+        `Student ${studentId} status toggled to ${
+          student.active ? "active" : "inactive"
+        }`
+      );
+
+      res.json({
+        message: `Đã ${
+          student.active ? "kích hoạt" : "vô hiệu hóa"
+        } sinh viên thành công`,
+        active: student.active,
+      });
+    } catch (error) {
+      console.error("Error toggling student status:", error);
+      res.status(500).json({
+        message: "Lỗi khi thay đổi trạng thái sinh viên",
+        error: error.message,
+      });
+    }
+  }
+);
+
 // Import sinh viên từ CSV
 app.post("/api/admin-classes/:id/import-students", auth, async (req, res) => {
   try {
@@ -3627,202 +4478,37 @@ app.use((req, res) => {
   });
 });
 
-// Start server
+// Endpoint đơn giản để xóa tài khoản giảng viên
+app.delete("/api/teachers/cancel", auth, async (req, res) => {
+  try {
+    const userId = req.account._id;
+    console.log(`Simple teacher account deletion for account: ${userId}`);
+
+    // Tìm thông tin tài khoản
+    const account = await Account.findById(userId);
+    if (!account) {
+      return res.status(404).json({ message: "Không tìm thấy tài khoản" });
+    }
+
+    // Tìm và xóa thông tin giảng viên nếu có
+    await Teacher.deleteOne({ account: userId });
+
+    // Xóa tham chiếu trong lớp học nếu có
+    await Class.updateMany({ teacher: userId }, { $unset: { teacher: 1 } });
+
+    // Xóa tài khoản
+    await Account.findByIdAndDelete(userId);
+    console.log(`Account successfully deleted: ${userId}`);
+
+    res.status(200).json({ message: "Tài khoản đã được xóa thành công" });
+  } catch (error) {
+    console.error("Error deleting teacher account:", error);
+    res.status(500).json({ message: "Lỗi khi xóa tài khoản" });
+  }
+});
+
+// Start the server
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Health check available at http://localhost:${PORT}/health`);
-});
-
-// Endpoint phê duyệt tài khoản sinh viên (chỉ admin và giáo viên)
-app.put("/api/admin/students/:id/approve", auth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log(`Approving student account: ${id}`);
-
-    // Kiểm tra quyền: admin hoặc giáo viên
-    if (req.account.role !== "admin" && req.account.role !== "teacher") {
-      return res.status(403).json({ message: "Không có quyền thực hiện" });
-    }
-
-    // Kiểm tra ID hợp lệ
-    if (!isValidObjectId(id)) {
-      return res.status(400).json({ message: "ID tài khoản không hợp lệ" });
-    }
-
-    // Tìm tài khoản
-    const account = await Account.findById(id);
-    if (!account) {
-      return res.status(404).json({ message: "Không tìm thấy tài khoản" });
-    }
-
-    // Cập nhật trạng thái tài khoản
-    account.status = "active";
-    await account.save();
-
-    console.log(`Student account approved: ${account.email}`);
-    res
-      .status(200)
-      .json({ message: "Đã duyệt tài khoản sinh viên thành công", account });
-  } catch (error) {
-    console.error("Error approving student account:", error);
-    res.status(500).json({ message: "Lỗi khi duyệt tài khoản sinh viên" });
-  }
-});
-
-// Add GET endpoint for all students (admin)
-app.get("/api/admin/students", auth, async (req, res) => {
-  try {
-    // Check if user is admin or teacher
-    if (req.account.role !== "admin" && req.account.role !== "teacher") {
-      return res
-        .status(403)
-        .json({ message: "Access denied. Not authorized." });
-    }
-
-    console.log("Querying all students for admin view");
-
-    // Get raw students for debugging
-    const students = await Student.find({});
-    if (students.length > 0) {
-      console.log("Raw student fields:", Object.keys(students[0]._doc));
-      console.log("Sample student:", students[0]);
-    } else {
-      console.log("No students found");
-    }
-
-    // Populate all possible fields
-    const populatedStudents = await Student.find({})
-      .populate({
-        path: "accountId",
-        select: "name email status",
-        model: "Account",
-      })
-      .populate("classes")
-      .populate("adminClass", "name");
-
-    // Process students to add consistent account reference
-    const processedStudents = populatedStudents.map((student) => {
-      const studentObj = student.toObject();
-
-      // Look for any field that might be the account reference
-      if (!studentObj.account && studentObj.accountId) {
-        studentObj.account = studentObj.accountId;
-      }
-
-      return studentObj;
-    });
-
-    console.log(`Fetched ${processedStudents.length} students for admin view`);
-
-    res.json(processedStudents);
-  } catch (error) {
-    console.error("Error fetching admin students:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Duplicate endpoint with different route definition for compatibility
-app.get("/api/admin/students/", auth, async (req, res) => {
-  try {
-    // Check if user is admin or teacher
-    if (req.account.role !== "admin" && req.account.role !== "teacher") {
-      return res
-        .status(403)
-        .json({ message: "Access denied. Not authorized." });
-    }
-
-    console.log("Querying all students (duplicate route)");
-
-    const students = await Student.find({})
-      .populate("classes")
-      .populate("adminClass", "name")
-      .sort({ createdAt: -1 });
-
-    console.log(`Fetched ${students.length} students for admin view`);
-
-    res.json(students);
-  } catch (error) {
-    console.error("Error fetching admin students:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// Endpoint phê duyệt tài khoản sinh viên (giảng viên chủ nhiệm và admin)
-app.put("/api/admin/students/:id/approve", auth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log(
-      `User ${req.account.name} (${req.account.role}) approving student account: ${id}`
-    );
-
-    // Kiểm tra ID hợp lệ
-    if (!isValidObjectId(id)) {
-      return res.status(400).json({ message: "ID tài khoản không hợp lệ" });
-    }
-
-    // Tìm tài khoản sinh viên
-    const account = await Account.findById(id);
-    if (!account) {
-      return res.status(404).json({ message: "Không tìm thấy tài khoản" });
-    }
-
-    // Xác minh đây là tài khoản sinh viên
-    if (account.role !== "student") {
-      return res
-        .status(400)
-        .json({ message: "Tài khoản này không phải sinh viên" });
-    }
-
-    // Nếu là giảng viên, kiểm tra xem sinh viên này có thuộc lớp họ chủ nhiệm không
-    if (req.account.role === "teacher") {
-      // Tìm thông tin sinh viên
-      const student = await Student.findOne({ accountId: id });
-
-      if (!student) {
-        return res
-          .status(404)
-          .json({ message: "Không tìm thấy thông tin sinh viên" });
-      }
-
-      if (!student.adminClass) {
-        return res
-          .status(400)
-          .json({ message: "Sinh viên này chưa được gán vào lớp quản lý nào" });
-      }
-
-      // Tìm lớp quản lý của sinh viên và kiểm tra xem giảng viên có phải chủ nhiệm không
-      const adminClass = await AdminClass.findById(student.adminClass);
-
-      if (!adminClass) {
-        return res
-          .status(404)
-          .json({ message: "Không tìm thấy lớp quản lý của sinh viên" });
-      }
-
-      if (
-        !adminClass.mainTeacher ||
-        adminClass.mainTeacher.toString() !== req.account._id.toString()
-      ) {
-        return res.status(403).json({
-          message:
-            "Bạn không có quyền duyệt sinh viên này vì bạn không phải giảng viên chủ nhiệm của lớp",
-        });
-      }
-    } else if (req.account.role !== "admin") {
-      // Nếu không phải giảng viên chủ nhiệm và không phải admin
-      return res.status(403).json({ message: "Không có quyền thực hiện" });
-    }
-
-    // Cập nhật trạng thái tài khoản
-    account.status = "active";
-    await account.save();
-
-    console.log(`Student account approved: ${account.email}`);
-    res
-      .status(200)
-      .json({ message: "Đã duyệt tài khoản sinh viên thành công", account });
-  } catch (error) {
-    console.error("Error approving student account:", error);
-    res.status(500).json({ message: "Lỗi khi duyệt tài khoản sinh viên" });
-  }
 });

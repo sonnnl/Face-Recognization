@@ -41,8 +41,9 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
   // Ngoại lệ: Cho phép giảng viên truy cập trang admin-classes
   const isAdminClassesPath =
     location.pathname === "/admin/admin-classes" ||
-    location.pathname === "/admin-classes" ||
-    location.pathname.startsWith("/admin/admin-classes/"); // Cho phép cả trang chi tiết
+    location.pathname.startsWith("/admin/admin-classes/") ||
+    location.pathname === "/teacher/admin-classes" ||
+    location.pathname.startsWith("/teacher/admin-classes/");
 
   if (adminOnly && !isAdmin() && !isAdminClassesPath) {
     return <Navigate to="/classes" replace />;

@@ -16,6 +16,19 @@ const studentSchema = new mongoose.Schema({
     unique: true,
     sparse: true,
   },
+  phone: {
+    type: String,
+    required: false,
+  },
+  gender: {
+    type: String,
+    enum: ["male", "female"],
+    default: "male",
+  },
+  address: {
+    type: String,
+    required: false,
+  },
   faceImage: {
     type: String,
     required: false,
@@ -33,6 +46,20 @@ const studentSchema = new mongoose.Schema({
   adminClass: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "AdminClass",
+    default: null,
+  },
+  status: {
+    type: String,
+    enum: ["pending", "approved", "rejected"],
+    default: "pending",
+  },
+  active: {
+    type: Boolean,
+    default: true,
+  },
+  accountId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Account",
     default: null,
   },
   mainClassId: {
