@@ -10,6 +10,7 @@ const attendanceSchema = new mongoose.Schema({
       status: { type: String, enum: ["present", "absent"], required: true },
       score: { type: Number, default: 0 }, // Điểm trừ cho mỗi lần vắng
       isBanned: { type: Boolean, default: false }, // Trạng thái cấm thi
+      timestamp: { type: Date }, // Add timestamp field to track when students are marked present
     },
   ],
   status: {

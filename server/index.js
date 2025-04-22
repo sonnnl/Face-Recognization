@@ -100,6 +100,85 @@ app.use(express.json());
 // Sử dụng các routes từ temp_routes.js
 app.use("/api", tempRoutes);
 
+// Endpoint to register a student to a class
+app.post("/api/classes/:id/register-student", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { studentId } = req.body;
+
+    if (!studentId) {
+      return res.status(400).json({
+        success: false,
+        message: "Student ID is required",
+      });
+    }
+
+    if (
+      !mongoose.Types.ObjectId.isValid(id) ||
+      !mongoose.Types.ObjectId.isValid(studentId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID format",
+      });
+    }
+
+    // Find the class
+    const classDoc = await Class.findById(id);
+    if (!classDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Class not found",
+      });
+    }
+
+    // Find the student
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    // Check if student is already in the class
+    if (classDoc.students && classDoc.students.includes(studentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Student is already registered in this class",
+      });
+    }
+
+    // Add student to class
+    if (!classDoc.students) {
+      classDoc.students = [];
+    }
+    classDoc.students.push(studentId);
+    classDoc.studentCount = (classDoc.studentCount || 0) + 1;
+    await classDoc.save();
+
+    // Add class to student's classes array
+    if (!student.classes) {
+      student.classes = [];
+    }
+    if (!student.classes.includes(id)) {
+      student.classes.push(id);
+      await student.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Student registered to class successfully",
+    });
+  } catch (error) {
+    console.error("Error registering student to class:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date() });
@@ -1779,21 +1858,19 @@ app.get("/api/attendance/class/:classId", auth, async (req, res) => {
       .populate("students.student")
       .sort({ date: -1, sessionNumber: -1 });
 
-    // Lọc chỉ giữ lại sinh viên có mặt
+    // Process records but include all students, not just present ones
     const processedRecords = attendanceRecords.map((record) => {
       const plainRecord = record.toObject();
 
       if (plainRecord.students && Array.isArray(plainRecord.students)) {
-        // Chỉ giữ lại sinh viên có mặt
-        plainRecord.students = plainRecord.students
-          .filter((student) => student.status === "present")
-          .map((student) => {
-            // Đảm bảo có timestamp
-            if (!student.timestamp) {
-              student.timestamp = plainRecord.createdAt || plainRecord.date;
-            }
-            return student;
-          });
+        // Include all students, not just those with "present" status
+        plainRecord.students = plainRecord.students.map((student) => {
+          // Đảm bảo có timestamp
+          if (!student.timestamp) {
+            student.timestamp = plainRecord.createdAt || plainRecord.date;
+          }
+          return student;
+        });
       }
 
       return plainRecord;
@@ -2005,6 +2082,12 @@ app.put("/api/attendance/:id/student/:studentId", async (req, res) => {
     }
 
     studentRecord.status = status;
+
+    // Add timestamp when student is marked as present
+    if (status === "present") {
+      studentRecord.timestamp = new Date();
+    }
+
     await attendance.save();
 
     res.json(attendance);
@@ -2045,7 +2128,6 @@ app.post("/api/attendance/:id/complete", async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
 // Lấy thống kê điểm danh của lớp
 app.get("/api/classes/:id/attendance-stats", auth, async (req, res) => {
   try {
