@@ -24,7 +24,7 @@ const TeacherRegister = () => {
     departmentId: "",
     phone: "",
     address: "",
-    title: "Giảng viên", // Chức danh: Giảng viên, Giáo sư, Tiến sĩ...
+    title: "Giảng viên", // Chức danh: Giảng viên, Trợ giảng
     bio: "", // Mô tả ngắn về giảng viên
   });
 
@@ -283,10 +283,7 @@ const TeacherRegister = () => {
                     className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
                   >
                     <option value="Giảng viên">Giảng viên</option>
-                    <option value="Giáo sư">Giáo sư</option>
-                    <option value="Phó Giáo sư">Phó Giáo sư</option>
-                    <option value="Tiến sĩ">Tiến sĩ</option>
-                    <option value="Thạc sĩ">Thạc sĩ</option>
+                    <option value="Trợ giảng">Trợ giảng</option>
                   </select>
                 </div>
 

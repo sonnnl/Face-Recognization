@@ -34,7 +34,9 @@ const AttendanceList = () => {
   const fetchAttendanceRecords = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`/api/attendance/${selectedClass}`);
+      const response = await axios.get(
+        `/api/attendance/records/class/${selectedClass}?date=${selectedDate}`
+      );
       setAttendanceRecords(response.data);
     } catch (error) {
       console.error("Error fetching attendance records:", error);
@@ -46,7 +48,7 @@ const AttendanceList = () => {
 
   const handleDelete = async (recordId) => {
     try {
-      await axios.delete(`/api/attendance/${recordId}`);
+      await axios.delete(`/api/attendance/records/${recordId}`);
       fetchAttendanceRecords(); // Refresh the list
     } catch (error) {
       console.error("Error deleting attendance record:", error);
@@ -54,132 +56,109 @@ const AttendanceList = () => {
     }
   };
 
-  const handleStatusChange = async (recordId, newStatus) => {
-    try {
-      await axios.patch(`/api/attendance/${recordId}`, { status: newStatus });
-      fetchAttendanceRecords(); // Refresh the list
-    } catch (error) {
-      console.error("Error updating attendance status:", error);
-      setError("Không thể cập nhật trạng thái điểm danh");
-    }
-  };
-
-  if (loading) {
-    return <div className="text-center py-4">Đang tải...</div>;
-  }
-
   return (
-    <div className="max-w-4xl mx-auto p-4">
-      <h2 className="text-2xl font-bold mb-4">Lịch sử điểm danh</h2>
+    <div className="container mx-auto p-4">
+      <h2 className="text-2xl font-bold mb-4">Danh sách Điểm danh</h2>
 
-      <div className="mb-4 space-y-4">
+      <div className="mb-4 grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700">
-            Chọn lớp
-          </label>
+          <label className="block mb-2">Chọn lớp:</label>
           <select
+            className="w-full p-2 border rounded"
             value={selectedClass}
             onChange={(e) => setSelectedClass(e.target.value)}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-            required
           >
-            <option value="">Chọn lớp</option>
-            {classes.map((cls) => (
-              <option key={cls._id} value={cls._id}>
-                {cls.name}
+            <option value="">Chọn lớp học</option>
+            {classes.map((classItem) => (
+              <option key={classItem._id} value={classItem._id}>
+                {classItem.name}
               </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700">
-            Chọn ngày
-          </label>
+          <label className="block mb-2">Chọn ngày:</label>
           <input
             type="date"
+            className="w-full p-2 border rounded"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-            required
           />
         </div>
       </div>
 
-      {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-          {error}
+      {error && <div className="text-red-500 mb-4">{error}</div>}
+
+      {loading ? (
+        <p>Đang tải dữ liệu...</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full bg-white border">
+            <thead>
+              <tr>
+                <th className="px-4 py-2 border">Sinh viên</th>
+                <th className="px-4 py-2 border">Trạng thái</th>
+                <th className="px-4 py-2 border">Thời gian</th>
+                <th className="px-4 py-2 border">Phương thức</th>
+                <th className="px-4 py-2 border">Tỉ lệ khớp</th>
+                <th className="px-4 py-2 border">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {attendanceRecords.length > 0 ? (
+                attendanceRecords.map((record) => (
+                  <tr key={record._id}>
+                    <td className="px-4 py-2 border">
+                      {record.student?.name || "Unknown"}
+                    </td>
+                    <td className="px-4 py-2 border">
+                      <span
+                        className={`inline-block px-2 py-1 rounded ${
+                          record.present
+                            ? "bg-green-100 text-green-800"
+                            : "bg-red-100 text-red-800"
+                        }`}
+                      >
+                        {record.present ? "Có mặt" : "Vắng mặt"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 border">
+                      {new Date(record.recordTime).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-2 border">
+                      {record.method === "face"
+                        ? "Nhận diện khuôn mặt"
+                        : record.method === "manual"
+                        ? "Thủ công"
+                        : "Tự động"}
+                    </td>
+                    <td className="px-4 py-2 border">
+                      {record.matchPercentage
+                        ? `${record.matchPercentage.toFixed(2)}%`
+                        : "N/A"}
+                    </td>
+                    <td className="px-4 py-2 border">
+                      <button
+                        className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                        onClick={() => handleDelete(record._id)}
+                      >
+                        Xóa
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="5" className="px-4 py-2 border text-center">
+                    Không có dữ liệu điểm danh
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
-
-      <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Họ và tên
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                MSSV
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Thời gian
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Trạng thái
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Thao tác
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {attendanceRecords.map((record) => (
-              <tr key={record._id}>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900">
-                    {record.student.name}
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm text-gray-500">
-                    {record.student.studentId}
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm text-gray-500">
-                    {new Date(record.date).toLocaleString("vi-VN")}
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <select
-                    value={record.status}
-                    onChange={(e) =>
-                      handleStatusChange(record._id, e.target.value)
-                    }
-                    className={`text-sm rounded px-2 py-1 ${
-                      record.status === "present"
-                        ? "bg-green-100 text-green-800"
-                        : "bg-red-100 text-red-800"
-                    }`}
-                  >
-                    <option value="present">Có mặt</option>
-                    <option value="absent">Vắng mặt</option>
-                  </select>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  <button
-                    onClick={() => handleDelete(record._id)}
-                    className="text-red-600 hover:text-red-900"
-                  >
-                    Xóa
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 };

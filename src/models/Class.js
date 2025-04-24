@@ -68,6 +68,16 @@ const classSchema = new mongoose.Schema({
     ref: "Department",
     default: null,
   },
+  campus: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Campus",
+    default: null,
+  },
+  room: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Room",
+    default: null,
+  },
   classroom: {
     room: {
       type: String,

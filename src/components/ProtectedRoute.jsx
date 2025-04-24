@@ -42,8 +42,8 @@ const ProtectedRoute = ({ children, adminOnly = false }) => {
   const isAdminClassesPath =
     location.pathname === "/admin/admin-classes" ||
     location.pathname.startsWith("/admin/admin-classes/") ||
-    location.pathname === "/teacher/admin-classes" ||
-    location.pathname.startsWith("/teacher/admin-classes/");
+    location.pathname === "/mainclasses" ||
+    location.pathname.startsWith("/mainclasses/");
 
   if (adminOnly && !isAdmin() && !isAdminClassesPath) {
     return <Navigate to="/classes" replace />;

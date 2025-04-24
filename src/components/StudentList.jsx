@@ -109,26 +109,47 @@ const StudentList = () => {
 
   const fetchClasses = async () => {
     try {
-      const response = await axios.get("/api/classes");
+      // Sử dụng API mới để lấy danh sách lớp
+      const response = await axios.get("/api/teacher/classes");
       console.log("Fetched classes:", response.data);
       setClasses(response.data);
     } catch (error) {
-      console.error("Error fetching classes:", error);
-      setError("Không thể tải danh sách lớp học");
+      // Thử với API cũ nếu API mới thất bại
+      try {
+        const fallbackResponse = await axios.get("/api/classes");
+        console.log("Fetched classes (fallback):", fallbackResponse.data);
+        setClasses(fallbackResponse.data);
+      } catch (fallbackError) {
+        console.error("Error fetching classes:", error, fallbackError);
+        setError("Không thể tải danh sách lớp học");
+      }
     }
   };
 
   const fetchStudents = async () => {
-    setLoading(true);
-    setError("");
     try {
-      console.log("Fetching students for class:", selectedClass);
-      const response = await axios.get(`/api/students/class/${selectedClass}`);
-      console.log("Fetched students:", response.data);
-      setStudents(response.data);
+      setLoading(true);
+
+      if (!selectedClass) {
+        setStudents([]);
+        return;
+      }
+
+      // Sử dụng API mới để lấy danh sách sinh viên trong lớp học
+      const response = await axios.get(
+        `/api/teacher/classes/${selectedClass}/students`
+      );
+
+      if (response.data && Array.isArray(response.data)) {
+        setStudents(response.data);
+      } else {
+        setStudents([]);
+        console.error("Expected array but got:", response.data);
+      }
     } catch (error) {
       console.error("Error fetching students:", error);
       setError("Không thể tải danh sách sinh viên");
+      setStudents([]);
     } finally {
       setLoading(false);
     }

@@ -50,9 +50,7 @@ const MainClassStudentManagement = ({ isTeacherView = false }) => {
   const [rejecting, setRejecting] = useState(false);
 
   // Determine the back button URL based on the view
-  const backButtonUrl = isTeacherView
-    ? "/teacher/admin-classes"
-    : "/admin/admin-classes";
+  const backButtonUrl = isTeacherView ? "/mainclasses" : "/admin/admin-classes";
 
   // Lấy thông tin lớp và danh sách sinh viên
   useEffect(() => {
@@ -270,14 +268,24 @@ const MainClassStudentManagement = ({ isTeacherView = false }) => {
     }
 
     try {
-      await axios.delete(`/api/admin-classes/${classId}/students/${studentId}`);
+      // Sử dụng API admin mới để gỡ sinh viên khỏi lớp chính
+      await axios.delete(`/api/admin/classes/${classId}/students/${studentId}`);
       toast.success("Đã xóa sinh viên khỏi lớp");
 
       // Cập nhật danh sách sinh viên
       setStudents(students.filter((student) => student._id !== studentId));
     } catch (error) {
       console.error("Error removing student:", error);
-      toast.error(error.response?.data?.message || "Lỗi khi xóa sinh viên");
+
+      if (
+        error.response &&
+        error.response.data &&
+        error.response.data.message
+      ) {
+        toast.error(error.response.data.message);
+      } else {
+        toast.error("Lỗi khi xóa sinh viên khỏi lớp");
+      }
     }
   };
 

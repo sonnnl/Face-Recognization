@@ -50,6 +50,7 @@ const AttendanceHistory = () => {
       setFormError("");
       setLoading(true);
 
+      // Sử dụng API mới với path param thay vì query param
       let url = `/api/attendance/class/${selectedClass}`;
 
       // Add date range params if they exist
@@ -79,7 +80,7 @@ const AttendanceHistory = () => {
           acc[key].students = record.students.map((s) => ({
             studentId: s.student?.studentId || "N/A",
             name: s.student?.name || "N/A",
-            status: s.status,
+            status: s.present ? "present" : "absent",
             timestamp: s.timestamp || record.date,
           }));
         }

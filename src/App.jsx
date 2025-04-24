@@ -32,6 +32,8 @@ import DepartmentManagement from "./components/admin/DepartmentManagement";
 import AdminClassManagement from "./components/admin/AdminClassManagement";
 import StudentManagement from "./components/admin/StudentManagement";
 import MainClassStudentManagement from "./components/admin/MainClassStudentManagement";
+import CampusManagement from "./components/admin/CampusManagement";
+import RoomManagement from "./components/admin/RoomManagement";
 import TemporaryAccountRedirect from "./components/TemporaryAccountRedirect";
 
 // Thay YOUR_GOOGLE_CLIENT_ID bằng ID thật từ Google Cloud Console
@@ -118,6 +120,14 @@ function AppContent() {
               }
             />
             <Route
+              path="/admin/admin-classes/:classId/students"
+              element={
+                <ProtectedRoute adminOnly={true}>
+                  <MainClassStudentManagement />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/admin/students"
               element={
                 <ProtectedRoute adminOnly={true}>
@@ -126,10 +136,18 @@ function AppContent() {
               }
             />
             <Route
-              path="/admin/admin-classes/:classId/students"
+              path="/admin/campuses"
               element={
                 <ProtectedRoute adminOnly={true}>
-                  <MainClassStudentManagement />
+                  <CampusManagement />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/rooms"
+              element={
+                <ProtectedRoute adminOnly={true}>
+                  <RoomManagement />
                 </ProtectedRoute>
               }
             />
@@ -164,6 +182,22 @@ function AppContent() {
               element={
                 <ProtectedRoute>
                   <ClassList />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/mainclasses"
+              element={
+                <ProtectedRoute>
+                  <AdminClassManagement isTeacherView={true} />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/mainclasses/:classId/students"
+              element={
+                <ProtectedRoute>
+                  <MainClassStudentManagement isTeacherView={true} />
                 </ProtectedRoute>
               }
             />
@@ -204,24 +238,6 @@ function AppContent() {
 
             {/* Pending account page */}
             <Route path="/pending-account" element={<PendingAccountPage />} />
-
-            {/* Teacher admin classes route - Đường dẫn riêng cho giảng viên */}
-            <Route
-              path="/teacher/admin-classes"
-              element={
-                <ProtectedRoute>
-                  <AdminClassManagement isTeacherView={true} />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/teacher/admin-classes/:classId/students"
-              element={
-                <ProtectedRoute>
-                  <MainClassStudentManagement isTeacherView={true} />
-                </ProtectedRoute>
-              }
-            />
 
             {/* Redirect home based on auth state */}
             <Route

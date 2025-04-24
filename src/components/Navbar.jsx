@@ -9,6 +9,8 @@ import {
   UserIcon,
   AcademicCapIcon,
   Cog6ToothIcon,
+  BuildingOfficeIcon,
+  BuildingStorefrontIcon,
 } from "@heroicons/react/24/solid";
 import { useAuth } from "../contexts/AuthContext";
 import { toast } from "react-toastify";
@@ -46,7 +48,7 @@ function Navbar() {
     },
     {
       text: "Lớp quản lý",
-      path: "/teacher/admin-classes",
+      path: "/mainclasses",
       icon: <UserGroupIcon className="w-5 h-5" />,
       tooltip: "Quản lý lớp hành chính",
     },
@@ -87,6 +89,20 @@ function Navbar() {
       >
         <AcademicCapIcon className="h-5 w-5 mr-2" />
         Quản lý lớp học
+      </Link>
+      <Link
+        to="/admin/campuses"
+        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
+      >
+        <BuildingOfficeIcon className="h-5 w-5 mr-2" />
+        Quản lý cơ sở
+      </Link>
+      <Link
+        to="/admin/rooms"
+        className="flex items-center px-3 py-2 text-gray-700 hover:text-gray-900"
+      >
+        <BuildingStorefrontIcon className="h-5 w-5 mr-2" />
+        Quản lý phòng
       </Link>
       <button
         onClick={handleLogout}

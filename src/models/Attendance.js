@@ -4,15 +4,7 @@ const attendanceSchema = new mongoose.Schema({
   class: { type: mongoose.Schema.Types.ObjectId, ref: "Class", required: true },
   sessionNumber: { type: Number, required: true }, // Số buổi học
   date: { type: Date, required: true },
-  students: [
-    {
-      student: { type: mongoose.Schema.Types.ObjectId, ref: "Student" },
-      status: { type: String, enum: ["present", "absent"], required: true },
-      score: { type: Number, default: 0 }, // Điểm trừ cho mỗi lần vắng
-      isBanned: { type: Boolean, default: false }, // Trạng thái cấm thi
-      timestamp: { type: Date }, // Add timestamp field to track when students are marked present
-    },
-  ],
+  // Removing embedded students array, will use AttendanceRecord model instead
   status: {
     type: String,
     enum: ["in_progress", "completed"],
@@ -20,42 +12,58 @@ const attendanceSchema = new mongoose.Schema({
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Teacher",
+    ref: "Account", // Changed from "Teacher" to "Account"
   },
   createdAt: { type: Date, default: Date.now },
+  startTime: { type: Date },
+  endTime: { type: Date },
+  title: { type: String },
+  description: { type: String },
+  location: { type: String },
+  // Stats fields (will be updated when the attendance session is completed)
+  stats: {
+    totalStudents: { type: Number, default: 0 },
+    presentCount: { type: Number, default: 0 },
+    absentCount: { type: Number, default: 0 },
+    attendanceRate: { type: Number, default: 0 }, // Percentage
+  },
 });
 
-// Tính điểm và cập nhật trạng thái cấm thi
-attendanceSchema.methods.calculateScores = async function () {
+// Method to finalize attendance and calculate statistics
+attendanceSchema.methods.finalize = async function () {
+  const AttendanceRecord = mongoose.model("AttendanceRecord");
   const Class = mongoose.model("Class");
+
+  // Get the class
   const classDoc = await Class.findById(this.class);
-
-  // Lấy tất cả các buổi điểm danh đã hoàn thành của lớp
-  const allAttendances = await this.constructor.find({
-    class: this.class,
-    status: "completed",
-  });
-
-  // Tính tổng số buổi vắng của mỗi sinh viên
-  const studentAbsences = {};
-  for (let att of allAttendances) {
-    for (let student of att.students) {
-      if (student.status === "absent") {
-        studentAbsences[student.student] =
-          (studentAbsences[student.student] || 0) + 1;
-      }
-    }
+  if (!classDoc) {
+    throw new Error("Class not found");
   }
 
-  // Cập nhật điểm và trạng thái cấm thi cho từng sinh viên
-  for (let student of this.students) {
-    if (student.status === "absent") {
-      student.score = -2; // Trừ 2 điểm cho mỗi buổi vắng
-    }
+  // Get all attendance records for this session
+  const records = await AttendanceRecord.find({ attendance: this._id });
 
-    // Kiểm tra và cập nhật trạng thái cấm thi
-    const totalAbsences = studentAbsences[student.student] || 0;
-    student.isBanned = totalAbsences > classDoc.maxAbsences;
+  // Calculate statistics
+  const totalStudents = records.length;
+  const presentCount = records.filter((record) => record.present).length;
+  const absentCount = totalStudents - presentCount;
+  const attendanceRate =
+    totalStudents > 0 ? (presentCount / totalStudents) * 100 : 0;
+
+  // Update statistics
+  this.stats = {
+    totalStudents,
+    presentCount,
+    absentCount,
+    attendanceRate,
+  };
+
+  // Mark as completed
+  this.status = "completed";
+
+  // If there's an end time, set it
+  if (!this.endTime) {
+    this.endTime = new Date();
   }
 
   return this.save();

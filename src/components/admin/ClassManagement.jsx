@@ -7,6 +7,9 @@ const ClassManagement = () => {
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [campuses, setCampuses] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [filteredRooms, setFilteredRooms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -19,6 +22,9 @@ const ClassManagement = () => {
     totalSessions: "",
     mainClass: false,
     department: "",
+    campus: "",
+    room: "",
+    // Keep classroom for backward compatibility
     classroom: {
       room: "",
       floor: "",
@@ -27,20 +33,29 @@ const ClassManagement = () => {
   });
   const [selectedTeacher, setSelectedTeacher] = useState("");
 
-  // Fetch classes, teachers and departments
+  // Fetch classes, teachers, departments, campuses, and rooms
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [classesResponse, teachersResponse, departmentsResponse] =
-          await Promise.all([
-            axios.get("/api/classes"),
-            axios.get("/api/admin/teachers"),
-            axios.get("/api/departments"),
-          ]);
+        const [
+          classesResponse,
+          teachersResponse,
+          departmentsResponse,
+          campusesResponse,
+          roomsResponse,
+        ] = await Promise.all([
+          axios.get("/api/classes"),
+          axios.get("/api/admin/teachers"),
+          axios.get("/api/departments"),
+          axios.get("/api/campuses"),
+          axios.get("/api/rooms"),
+        ]);
         setClasses(classesResponse.data);
         setTeachers(teachersResponse.data);
         setDepartments(departmentsResponse.data);
+        setCampuses(campusesResponse.data);
+        setRooms(roomsResponse.data);
       } catch (error) {
         console.error("Error fetching data:", error);
         toast.error("Không thể tải dữ liệu");
@@ -51,6 +66,18 @@ const ClassManagement = () => {
 
     fetchData();
   }, []);
+
+  // Filter rooms when campus changes
+  useEffect(() => {
+    if (formData.campus) {
+      const filtered = rooms.filter(
+        (room) => room.campus && room.campus._id === formData.campus
+      );
+      setFilteredRooms(filtered);
+    } else {
+      setFilteredRooms([]);
+    }
+  }, [formData.campus, rooms]);
 
   // Handle form change
   const handleChange = (e) => {
@@ -83,6 +110,8 @@ const ClassManagement = () => {
       totalSessions: classItem.totalSessions,
       mainClass: classItem.mainClass || false,
       department: classItem.department || "",
+      campus: classItem.campus || "",
+      room: classItem.room || "",
       classroom: {
         room: classItem.classroom?.room || "",
         floor: classItem.classroom?.floor || "",
@@ -195,7 +224,21 @@ const ClassManagement = () => {
     return department ? department.name : "Không xác định";
   };
 
-  // Format classroom info
+  // Get campus name by ID
+  const getCampusName = (campusId) => {
+    if (!campusId) return "-";
+    const campus = campuses.find((c) => c._id === campusId);
+    return campus ? campus.name : "Không xác định";
+  };
+
+  // Get room name by ID
+  const getRoomName = (roomId) => {
+    if (!roomId) return "-";
+    const room = rooms.find((r) => r._id === roomId);
+    return room ? room.name : "Không xác định";
+  };
+
+  // Format classroom info (for backward compatibility)
   const formatClassroom = (classroom) => {
     if (
       !classroom ||
@@ -205,11 +248,25 @@ const ClassManagement = () => {
     }
 
     const parts = [];
+
     if (classroom.room) parts.push(`Phòng ${classroom.room}`);
     if (classroom.floor) parts.push(`Tầng ${classroom.floor}`);
     if (classroom.building) parts.push(`Tòa ${classroom.building}`);
 
     return parts.join(", ");
+  };
+
+  // Format location info from campus and room
+  const formatLocation = (classItem) => {
+    // Check for new campus and room format first
+    if (classItem.campus && classItem.room) {
+      const campus = getCampusName(classItem.campus);
+      const room = getRoomName(classItem.room);
+      return `${campus} - ${room}`;
+    }
+
+    // Fallback to old classroom format
+    return formatClassroom(classItem.classroom);
   };
 
   return (
@@ -294,7 +351,7 @@ const ClassManagement = () => {
                   Khoa
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Phòng học
+                  Địa điểm
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Ngày bắt đầu
@@ -347,7 +404,7 @@ const ClassManagement = () => {
                       {getDepartmentName(classItem.department)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatClassroom(classItem.classroom)}
+                      {formatLocation(classItem)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {new Date(classItem.startDate).toLocaleDateString(
@@ -470,46 +527,98 @@ const ClassManagement = () => {
               </div>
 
               <div className="mb-4 border-t border-gray-200 pt-4">
-                <h3 className="text-md font-bold mb-2">Thông tin phòng học</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <h3 className="text-md font-bold mb-2">Thông tin địa điểm</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
                     <label className="block text-gray-700 text-sm font-bold mb-2">
-                      Phòng
+                      Cơ sở
                     </label>
-                    <input
-                      type="text"
-                      name="classroom.room"
-                      value={formData.classroom.room}
+                    <select
+                      name="campus"
+                      value={formData.campus}
                       onChange={handleChange}
-                      placeholder="Ví dụ: B1.01"
                       className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                    >
+                      <option value="">-- Chọn cơ sở --</option>
+                      {campuses.map((campus) => (
+                        <option key={campus._id} value={campus._id}>
+                          {campus.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
+
                   <div>
                     <label className="block text-gray-700 text-sm font-bold mb-2">
-                      Tầng
+                      Phòng học
                     </label>
-                    <input
-                      type="text"
-                      name="classroom.floor"
-                      value={formData.classroom.floor}
+                    <select
+                      name="room"
+                      value={formData.room}
                       onChange={handleChange}
-                      placeholder="Ví dụ: 2"
-                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                      disabled={!formData.campus}
+                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                    >
+                      <option value="">-- Chọn phòng --</option>
+                      {filteredRooms.map((room) => (
+                        <option key={room._id} value={room._id}>
+                          {room.name} - Tòa {room.building}, Tầng {room.floor}
+                        </option>
+                      ))}
+                    </select>
+                    {!formData.campus && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Vui lòng chọn cơ sở trước
+                      </p>
+                    )}
                   </div>
-                  <div>
-                    <label className="block text-gray-700 text-sm font-bold mb-2">
-                      Tòa nhà
-                    </label>
-                    <input
-                      type="text"
-                      name="classroom.building"
-                      value={formData.classroom.building}
-                      onChange={handleChange}
-                      placeholder="Ví dụ: A"
-                      className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                </div>
+
+                <div className="bg-gray-100 p-3 rounded-md mb-3">
+                  <h4 className="text-sm font-semibold mb-2">
+                    Legacy: Thông tin phòng học (hỗ trợ cũ)
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-gray-700 text-sm font-bold mb-2">
+                        Phòng
+                      </label>
+                      <input
+                        type="text"
+                        name="classroom.room"
+                        value={formData.classroom.room}
+                        onChange={handleChange}
+                        placeholder="Ví dụ: B1.01"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-700 text-sm font-bold mb-2">
+                        Tầng
+                      </label>
+                      <input
+                        type="text"
+                        name="classroom.floor"
+                        value={formData.classroom.floor}
+                        onChange={handleChange}
+                        placeholder="Ví dụ: 2"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-700 text-sm font-bold mb-2">
+                        Tòa nhà
+                      </label>
+                      <input
+                        type="text"
+                        name="classroom.building"
+                        value={formData.classroom.building}
+                        onChange={handleChange}
+                        placeholder="Ví dụ: A"
+                        className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

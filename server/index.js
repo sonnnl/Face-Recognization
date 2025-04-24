@@ -14,6 +14,10 @@ import AdminClass from "../src/models/AdminClass.js";
 import Teacher from "../src/models/Teacher.js";
 import { auth, adminOnly, generateToken } from "../src/middleware/auth.js";
 import tempRoutes from "./temp_routes.js";
+import Campus from "../src/models/Campus.js";
+import Room from "../src/models/Room.js";
+import ClassStudent from "../src/models/ClassStudent.js";
+import AttendanceRecord from "../src/models/AttendanceRecord.js";
 
 // Thêm log để xác nhận model được load
 console.log("Loaded models:", {
@@ -24,10 +28,11 @@ console.log("Loaded models:", {
   Attendance: !!Attendance,
   AdminClass: !!AdminClass,
   Teacher: !!Teacher,
+  Campus: !!Campus,
+  Room: !!Room,
 });
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
 // CORS config
 
@@ -50,41 +55,59 @@ app.get("/ping", (req, res) => {
 
 // Connect to MongoDB
 connectDB()
-  .then(() => {
+  .then(async () => {
     console.log("MongoDB connected successfully");
 
-    // Xóa index cũ studentId_1 nếu tồn tại
+    // Check if collections exist before attempting to drop indexes
     try {
-      mongoose.connection
-        .collection("students")
-        .dropIndex("studentId_1")
-        .then(() => {
-          console.log("Old index 'studentId_1' dropped successfully");
-        })
-        .catch((err) => {
-          // Bỏ qua lỗi nếu index không tồn tại
-          if (err.code !== 27) {
-            console.error("Error dropping old index:", err);
-          } else {
-            console.log("No old index to drop");
-          }
-        });
+      const collections = await mongoose.connection.db
+        .listCollections()
+        .toArray();
+      const collectionNames = collections.map((c) => c.name);
 
-      // Xóa index student_1_date_1 trong bảng attendances
-      mongoose.connection
-        .collection("attendances")
-        .dropIndex("student_1_date_1")
-        .then(() => {
-          console.log("Old index 'student_1_date_1' dropped successfully");
-        })
-        .catch((err) => {
-          // Bỏ qua lỗi nếu index không tồn tại
-          if (err.code !== 27) {
-            console.error("Error dropping attendance index:", err);
-          } else {
-            console.log("No attendance index to drop");
-          }
-        });
+      // Only attempt to drop index if the collection exists
+      if (collectionNames.includes("students")) {
+        mongoose.connection
+          .collection("students")
+          .dropIndex("studentId_1")
+          .then(() => {
+            console.log("Old index 'studentId_1' dropped successfully");
+          })
+          .catch((err) => {
+            // Bỏ qua lỗi nếu index không tồn tại
+            if (err.code !== 27) {
+              console.error("Error dropping old index:", err);
+            } else {
+              console.log("No old index to drop");
+            }
+          });
+      } else {
+        console.log(
+          "Collection 'students' does not exist, skipping index drop"
+        );
+      }
+
+      // Only attempt to drop attendance index if the collection exists
+      if (collectionNames.includes("attendances")) {
+        mongoose.connection
+          .collection("attendances")
+          .dropIndex("student_1_date_1")
+          .then(() => {
+            console.log("Old index 'student_1_date_1' dropped successfully");
+          })
+          .catch((err) => {
+            // Bỏ qua lỗi nếu index không tồn tại
+            if (err.code !== 27) {
+              console.error("Error dropping attendance index:", err);
+            } else {
+              console.log("No attendance index to drop");
+            }
+          });
+      } else {
+        console.log(
+          "Collection 'attendances' does not exist, skipping index drop"
+        );
+      }
     } catch (error) {
       console.log("Could not attempt to drop index:", error.message);
     }
@@ -809,6 +832,8 @@ app.post("/api/classes", auth, async (req, res) => {
       totalSessions,
       mainClass,
       department,
+      campus,
+      room,
       classroom,
     } = req.body;
 
@@ -820,6 +845,8 @@ app.post("/api/classes", auth, async (req, res) => {
       teacher: req.account._id,
       mainClass,
       department,
+      campus,
+      room,
       classroom,
     });
 
@@ -857,6 +884,35 @@ app.post("/api/classes", auth, async (req, res) => {
       });
     }
 
+    // Validate campus if provided
+    if (campus && !mongoose.Types.ObjectId.isValid(campus)) {
+      return res.status(400).json({
+        message: "ID cơ sở không hợp lệ",
+      });
+    }
+
+    // Validate room if provided
+    if (room && !mongoose.Types.ObjectId.isValid(room)) {
+      return res.status(400).json({
+        message: "ID phòng học không hợp lệ",
+      });
+    }
+
+    // If room is provided, verify it belongs to the specified campus
+    if (room && campus) {
+      const roomDetails = await Room.findById(room);
+      if (!roomDetails) {
+        return res.status(400).json({
+          message: "Không tìm thấy phòng học",
+        });
+      }
+      if (roomDetails.campus.toString() !== campus) {
+        return res.status(400).json({
+          message: "Phòng học không thuộc cơ sở đã chọn",
+        });
+      }
+    }
+
     const newClass = new Class({
       name: name.trim(),
       description: description ? description.trim() : "",
@@ -867,6 +923,8 @@ app.post("/api/classes", auth, async (req, res) => {
       students: [],
       mainClass: mainClass || false,
       department: department || null,
+      campus: campus || null,
+      room: room || null,
       classroom: classroom
         ? {
             room: classroom.room || "",
@@ -1010,6 +1068,8 @@ app.get("/api/students/class/:classId", auth, async (req, res) => {
 });
 
 // DELETE student from class - This must come BEFORE the generic /api/students/:id route
+// Endpoint này được giữ lại để tương thích ngược (backward compatibility) với mã phía client.
+// Nên sử dụng endpoint DELETE /api/students/:id theo chuẩn RESTful API.
 app.delete("/api/students/delete/:id", auth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -2061,174 +2121,187 @@ app.post("/api/attendance/start", auth, async (req, res) => {
   }
 });
 
-// Cập nhật trạng thái điểm danh của sinh viên
+// API lấy chi tiết điểm danh của một buổi học
+app.get("/api/attendance/:id/details", async (req, res) => {
+  try {
+    // Kiểm tra ID của buổi điểm danh
+    if (!isValidObjectId(req.params.id)) {
+      return res
+        .status(400)
+        .json({ message: "ID buổi điểm danh không hợp lệ" });
+    }
+
+    // Tìm buổi điểm danh
+    const attendance = await Attendance.findById(req.params.id);
+    if (!attendance) {
+      return res.status(404).json({ message: "Không tìm thấy buổi điểm danh" });
+    }
+
+    // Tìm tất cả bản ghi điểm danh của buổi học này
+    const attendanceRecords = await AttendanceRecord.find({
+      attendance: req.params.id,
+    })
+      .populate("student", "name studentId")
+      .lean();
+
+    // Phân loại theo trạng thái tham dự
+    const presentStudents = attendanceRecords.filter(
+      (record) => record.present
+    );
+    const absentStudents = attendanceRecords.filter(
+      (record) => !record.present
+    );
+
+    // Tính tỷ lệ tham dự
+    const totalStudents = attendanceRecords.length;
+    const presentCount = presentStudents.length;
+    const absentCount = absentStudents.length;
+    const attendanceRate =
+      totalStudents > 0 ? (presentCount / totalStudents) * 100 : 0;
+
+    // Cập nhật lại thống kê cho chắc chắn
+    if (
+      attendance.stats.totalStudents !== totalStudents ||
+      attendance.stats.presentCount !== presentCount ||
+      attendance.stats.absentCount !== absentCount
+    ) {
+      attendance.stats = {
+        totalStudents,
+        presentCount,
+        absentCount,
+        attendanceRate: Math.round(attendanceRate * 100) / 100,
+      };
+
+      await attendance.save();
+      console.log(`Updated attendance stats for session ${attendance._id}`);
+    }
+
+    // Trả về thông tin chi tiết
+    res.json({
+      attendance,
+      records: {
+        all: attendanceRecords,
+        present: presentStudents,
+        absent: absentStudents,
+      },
+      stats: {
+        totalStudents,
+        presentCount,
+        absentCount,
+        attendanceRate: Math.round(attendanceRate * 100) / 100,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching attendance details:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Sửa lại API cập nhật trạng thái điểm danh
 app.put("/api/attendance/:id/student/:studentId", async (req, res) => {
   try {
-    const { status } = req.body;
-    const attendance = await Attendance.findById(req.params.id);
+    const { id, studentId } = req.params;
+    const { present = true, method = "manual", note } = req.body;
 
-    if (!attendance) {
-      return res
-        .status(404)
-        .json({ message: "Không tìm thấy bản ghi điểm danh" });
-    }
-
-    const studentRecord = attendance.students.find(
-      (s) => s.student.toString() === req.params.studentId
+    console.log(
+      `Marking student ${studentId} as ${
+        present ? "present" : "absent"
+      } for attendance ${id}`
     );
 
-    if (!studentRecord) {
-      return res.status(404).json({ message: "Không tìm thấy sinh viên" });
-    }
-
-    studentRecord.status = status;
-
-    // Add timestamp when student is marked as present
-    if (status === "present") {
-      studentRecord.timestamp = new Date();
-    }
-
-    await attendance.save();
-
-    res.json(attendance);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Kết thúc điểm danh và tính điểm
-app.post("/api/attendance/:id/complete", async (req, res) => {
-  try {
-    const attendance = await Attendance.findById(req.params.id);
-    if (!attendance) {
+    // Kiểm tra attendance ID có hợp lệ không
+    if (!isValidObjectId(id)) {
       return res
-        .status(404)
-        .json({ message: "Không tìm thấy bản ghi điểm danh" });
+        .status(400)
+        .json({ message: "ID buổi điểm danh không hợp lệ" });
     }
 
-    // Tính điểm và cập nhật trạng thái cấm thi
-    await attendance.calculateScores();
+    // Kiểm tra student ID có hợp lệ không
+    if (!isValidObjectId(studentId)) {
+      return res.status(400).json({ message: "ID sinh viên không hợp lệ" });
+    }
 
-    // Cập nhật trạng thái buổi học trong lịch
+    // Tìm buổi điểm danh
+    const attendance = await Attendance.findById(id);
+    if (!attendance) {
+      return res.status(404).json({ message: "Không tìm thấy buổi điểm danh" });
+    }
+
+    // Tìm lớp học
     const classDoc = await Class.findById(attendance.class);
-    const session = classDoc.schedule.find(
-      (s) => s.sessionNumber === attendance.sessionNumber
-    );
-    if (session) {
-      session.status = "completed";
-      await classDoc.save();
-    }
-
-    // Cập nhật trạng thái điểm danh
-    attendance.status = "completed";
-    await attendance.save();
-
-    res.json(attendance);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-// Lấy thống kê điểm danh của lớp
-app.get("/api/classes/:id/attendance-stats", auth, async (req, res) => {
-  try {
-    const classDoc = await Class.findById(req.params.id).populate({
-      path: "students",
-      select: "name studentId",
-    });
-
     if (!classDoc) {
       return res.status(404).json({ message: "Không tìm thấy lớp học" });
     }
 
-    // Check permissions: only admin or the teacher who owns the class can access
-    if (
-      req.account.role !== "admin" &&
-      classDoc.teacher.toString() !== req.account._id.toString()
-    ) {
-      console.log("Unauthorized stats access by teacher:", req.account._id);
-      return res.status(403).json({
-        message: "Bạn không có quyền xem thống kê điểm danh của lớp học này",
+    // Kiểm tra xem sinh viên có thuộc lớp học này không
+    const isStudentInClass = await ClassStudent.findOne({
+      class: attendance.class,
+      student: studentId,
+    });
+
+    if (!isStudentInClass) {
+      return res
+        .status(404)
+        .json({ message: "Sinh viên không thuộc lớp học này" });
+    }
+
+    // Tìm hoặc tạo bản ghi điểm danh
+    let record = await AttendanceRecord.findOne({
+      attendance: id,
+      student: studentId,
+    });
+
+    if (record) {
+      // Cập nhật bản ghi hiện có
+      record.present = present;
+      record.method = method;
+      record.recordTime = new Date();
+      if (note) record.note = note;
+    } else {
+      // Tạo bản ghi mới
+      record = new AttendanceRecord({
+        attendance: id,
+        class: attendance.class,
+        student: studentId,
+        present: present,
+        method: method,
+        recordTime: new Date(),
+        note: note,
       });
     }
 
-    const attendances = await Attendance.find({
-      class: req.params.id,
-      status: "completed",
-    });
+    // Lưu bản ghi điểm danh
+    await record.save();
 
-    // Tính thống kê cho từng sinh viên
-    const stats = {};
-    for (let student of classDoc.students) {
-      stats[student._id] = {
-        _id: student._id,
-        name: student.name,
-        studentId: student.studentId,
-        totalAbsences: 0,
-        totalScore: 0,
-        isBanned: false,
+    // Nếu buổi điểm danh đã hoàn thành, cập nhật lại thống kê
+    if (attendance.status === "completed") {
+      // Tính lại thống kê
+      const allRecords = await AttendanceRecord.find({ attendance: id });
+      const totalStudents = allRecords.length;
+      const presentCount = allRecords.filter((r) => r.present).length;
+      const absentCount = totalStudents - presentCount;
+      const attendanceRate =
+        totalStudents > 0 ? (presentCount / totalStudents) * 100 : 0;
+
+      // Cập nhật thống kê
+      attendance.stats = {
+        totalStudents,
+        presentCount,
+        absentCount,
+        attendanceRate: Math.round(attendanceRate * 100) / 100,
       };
+
+      await attendance.save();
+      console.log(`Updated stats for completed attendance session ${id}`);
     }
 
-    for (let att of attendances) {
-      for (let student of att.students) {
-        const studentId = student.student.toString();
-        if (stats[studentId] && student.status === "absent") {
-          stats[studentId].totalAbsences++;
-          stats[studentId].totalScore += student.score;
-        }
-        if (stats[studentId]) {
-          stats[studentId].isBanned = student.isBanned;
-        }
-      }
-    }
-
+    // Trả về thông tin bản ghi điểm danh
     res.json({
-      class: classDoc,
-      stats: Object.values(stats),
+      message: `Đã đánh dấu sinh viên ${present ? "có mặt" : "vắng mặt"}`,
+      record,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Lấy lịch sử điểm danh của lớp học
-app.get("/api/classes/:id/attendance", auth, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check class existence and permissions
-    const classDoc = await Class.findById(id);
-    if (!classDoc) {
-      return res.status(404).json({ message: "Không tìm thấy lớp học" });
-    }
-
-    // Check permissions: only admin or the teacher who owns the class can access
-    if (
-      req.account.role !== "admin" &&
-      classDoc.teacher.toString() !== req.account._id.toString()
-    ) {
-      console.log(
-        "Unauthorized attendance access by teacher:",
-        req.account._id
-      );
-      return res.status(403).json({
-        message: "Bạn không có quyền xem lịch sử điểm danh của lớp học này",
-      });
-    }
-
-    // Tìm tất cả các bản ghi điểm danh của lớp học
-    const attendanceRecords = await Attendance.find({ class: id }).populate({
-      path: "students.student",
-      select: "name studentId",
-    });
-
-    if (!attendanceRecords || attendanceRecords.length === 0) {
-      return res.json([]);
-    }
-
-    res.json(attendanceRecords);
-  } catch (error) {
-    console.error("Error fetching attendance history:", error);
+    console.error("Error marking student attendance:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -2267,10 +2340,7 @@ app.get("/api/classes/:id/attendance-export", auth, async (req, res) => {
     }
 
     // Lấy thông tin lớp học
-    const classDoc = await Class.findById(id).populate({
-      path: "students",
-      select: "name studentId",
-    });
+    const attendanceRecords = await Attendance.find({ class: id }).lean();
 
     if (!classDoc) {
       return res.status(404).json({ message: "Không tìm thấy lớp học" });
@@ -2306,10 +2376,7 @@ app.get("/api/classes/:id/attendance-export", auth, async (req, res) => {
 
     // Lấy dữ liệu điểm danh
     const attendances = await Attendance.find(query)
-      .populate({
-        path: "students.student",
-        select: "name studentId",
-      })
+      .lean()
       .sort({ sessionNumber: 1 });
 
     // Tạo workbook và worksheet
@@ -2918,19 +2985,43 @@ app.get("/api/teachers/profile/:accountId", auth, async (req, res) => {
         .json({ message: "Không có quyền truy cập thông tin này" });
     }
 
-    const teacher = await Teacher.findOne({ account: accountId }).populate(
-      "department"
-    );
+    // Tìm thông tin tài khoản thay vì tìm thông tin từ model Teacher
+    const account = await Account.findById(accountId);
 
-    if (!teacher) {
+    if (!account || account.role !== "teacher") {
       console.log(`No teacher profile found for account: ${accountId}`);
       return res
         .status(404)
         .json({ message: "Không tìm thấy thông tin giảng viên" });
     }
 
-    console.log(`Teacher profile found: ${teacher._id}`);
-    res.status(200).json(teacher);
+    // Nếu vẫn cần thông tin từ Teacher model (đối với code đang chuyển đổi)
+    let additionalInfo = {};
+    const teacherInfo = await Teacher.findOne({ account: accountId }).populate(
+      "department"
+    );
+    if (teacherInfo) {
+      additionalInfo = {
+        departmentId: teacherInfo.department?._id,
+        departmentName: teacherInfo.department?.name,
+        phone: teacherInfo.phone,
+        address: teacherInfo.address,
+        title: teacherInfo.title,
+        bio: teacherInfo.bio,
+      };
+    }
+
+    console.log(`Teacher profile found for: ${account.name}`);
+    res.status(200).json({
+      _id: account._id,
+      name: account.name,
+      email: account.email,
+      role: account.role,
+      status: account.status,
+      createdAt: account.createdAt,
+      lastLogin: account.lastLogin,
+      ...additionalInfo,
+    });
   } catch (error) {
     console.error("Error fetching teacher profile:", error);
     res.status(500).json({ message: "Lỗi khi lấy thông tin giảng viên" });
@@ -2951,12 +3042,28 @@ app.get("/api/teachers/:id", auth, async (req, res) => {
       });
     }
 
+    // Tìm kiếm trong Account model
     const teacher = await Account.findById(id);
+
+    // Log kết quả tìm kiếm
+    console.log(
+      "Teacher lookup result:",
+      teacher
+        ? {
+            _id: teacher._id,
+            name: teacher.name,
+            email: teacher.email,
+            role: teacher.role,
+          }
+        : "Not found"
+    );
+
+    // Trả về thông tin mặc định nếu không tìm thấy
     if (!teacher) {
-      console.log("Teacher not found:", id);
-      return res.status(404).json({
-        message: "Không tìm thấy giáo viên",
-        id: id,
+      return res.json({
+        _id: id,
+        name: "Không xác định",
+        role: "unknown",
       });
     }
 
@@ -2968,9 +3075,12 @@ app.get("/api/teachers/:id", auth, async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching teacher:", error);
-    res.status(500).json({
-      message: "Lỗi khi tải thông tin giáo viên",
-      error: error.message,
+    // Trả về thông tin mặc định thay vì báo lỗi
+    res.json({
+      _id: req.params.id,
+      name: "Không có thông tin",
+      role: "unknown",
+      error: true,
     });
   }
 });
@@ -3294,6 +3404,8 @@ app.put("/api/admin/classes/:id", auth, adminOnly, async (req, res) => {
       totalSessions,
       mainClass,
       department,
+      campus,
+      room,
       classroom,
     } = req.body;
 
@@ -3331,11 +3443,11 @@ app.put("/api/admin/classes/:id", auth, adminOnly, async (req, res) => {
     }
 
     // Cập nhật thông tin phòng học
-    if (classroom) {
-      classToUpdate.classroom = {
-        room: classroom.room || "",
-        floor: classroom.floor || "",
-        building: classroom.building || "",
+    if (room) {
+      classToUpdate.room = {
+        room: room.room || "",
+        floor: room.floor || "",
+        building: room.building || "",
       };
     }
 
@@ -4261,8 +4373,41 @@ app.post("/api/admin-classes/:id/students", auth, async (req, res) => {
     // Kiểm tra xem mã sinh viên đã tồn tại chưa
     const existingStudent = await Student.findOne({ studentId });
     if (existingStudent) {
+      // Thêm kiểm tra xem sinh viên đã thuộc lớp quản lý này chưa
+      if (
+        existingStudent.adminClass &&
+        existingStudent.adminClass.toString() === id
+      ) {
+        return res.status(400).json({
+          message: "Sinh viên này đã thuộc lớp quản lý này",
+        });
+      }
+
+      // Nếu sinh viên thuộc lớp quản lý khác
+      if (existingStudent.adminClass) {
+        const currentClass = await AdminClass.findById(
+          existingStudent.adminClass
+        );
+        const className = currentClass ? currentClass.name : "Không xác định";
+
+        return res.status(400).json({
+          message: "Mã sinh viên đã tồn tại và thuộc lớp khác",
+          studentInfo: {
+            id: existingStudent._id,
+            name: existingStudent.name,
+            studentId: existingStudent.studentId,
+            currentClassName: className,
+          },
+        });
+      }
+
       return res.status(400).json({
         message: "Mã sinh viên đã tồn tại trong hệ thống",
+        studentInfo: {
+          id: existingStudent._id,
+          name: existingStudent.name,
+          studentId: existingStudent.studentId,
+        },
       });
     }
 
@@ -4282,7 +4427,14 @@ app.post("/api/admin-classes/:id/students", auth, async (req, res) => {
     // Cập nhật số lượng sinh viên trong lớp
     await AdminClass.updateStudentCount(id);
 
-    res.status(201).json(savedStudent);
+    res.status(201).json({
+      message: "Đã thêm sinh viên vào lớp thành công",
+      student: savedStudent,
+      classInfo: {
+        id: adminClass._id,
+        name: adminClass.name,
+      },
+    });
   } catch (error) {
     console.error("Error adding student to admin class:", error);
     res.status(500).json({
@@ -4303,9 +4455,18 @@ app.delete(
         `User ${req.account.name} (${req.account.role}) removing student ${studentId} from admin class ${classId}`
       );
 
-      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+      // Kiểm tra định dạng ID
+      if (!isValidObjectId(classId)) {
         return res.status(400).json({
-          message: "ID không hợp lệ",
+          message: "ID lớp quản lý không hợp lệ",
+          classId,
+        });
+      }
+
+      if (!isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID sinh viên không hợp lệ",
+          studentId,
         });
       }
 
@@ -4314,6 +4475,7 @@ app.delete(
       if (!adminClass) {
         return res.status(404).json({
           message: "Không tìm thấy lớp quản lý",
+          classId,
         });
       }
 
@@ -4328,18 +4490,32 @@ app.delete(
         });
       }
 
-      // Tìm và xóa sinh viên
+      // Tìm sinh viên
       const student = await Student.findById(studentId);
       if (!student) {
+        // Kiểm tra xem có sinh viên nào có mã như vậy không
         return res.status(404).json({
           message: "Không tìm thấy sinh viên",
+          studentId,
         });
       }
 
       // Kiểm tra xem sinh viên có thuộc lớp quản lý này không
-      if (student.adminClass?.toString() !== classId) {
+      if (!student.adminClass) {
+        return res.status(400).json({
+          message: "Sinh viên này không thuộc lớp quản lý nào",
+          studentId,
+          studentName: student.name,
+        });
+      }
+
+      if (student.adminClass.toString() !== classId) {
         return res.status(400).json({
           message: "Sinh viên không thuộc lớp quản lý này",
+          studentId,
+          studentName: student.name,
+          studentClass: student.adminClass.toString(),
+          requestedClass: classId,
         });
       }
 
@@ -4352,6 +4528,11 @@ app.delete(
 
       res.json({
         message: "Đã xóa sinh viên khỏi lớp thành công",
+        studentInfo: {
+          id: studentId,
+          name: student.name,
+          studentId: student.studentId,
+        },
       });
     } catch (error) {
       console.error("Error removing student from admin class:", error);
@@ -4539,27 +4720,6 @@ app.post("/api/admin-classes/:id/import-students", auth, async (req, res) => {
   }
 });
 
-// ==================== ERROR HANDLING ====================
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err);
-  res.status(500).json({
-    message: "Đã xảy ra lỗi",
-    error: err.message,
-  });
-});
-
-// 404 handler - must be the last middleware
-app.use((req, res) => {
-  console.log("404 Not Found:", req.method, req.path);
-  res.status(404).json({
-    message: "Không tìm thấy tài nguyên",
-    path: req.path,
-    method: req.method,
-  });
-});
-
 // Endpoint đơn giản để xóa tài khoản giảng viên
 app.delete("/api/teachers/cancel", auth, async (req, res) => {
   try {
@@ -4588,9 +4748,2752 @@ app.delete("/api/teachers/cancel", auth, async (req, res) => {
     res.status(500).json({ message: "Lỗi khi xóa tài khoản" });
   }
 });
+// Add the tester endpoint
+app.get("/tester", async (req, res) => {
+  res.send("Hello World");
+});
 
-// Start the server
+// ==================== CAMPUS ROUTES ====================
+
+// Get all campuses
+app.get("/api/campuses", async (req, res) => {
+  try {
+    const campuses = await Campus.find().sort({ name: 1 });
+    res.json(campuses);
+  } catch (error) {
+    console.error("Error fetching campuses:", error);
+    res.status(500).json({ message: "Lỗi khi tải danh sách cơ sở" });
+  }
+});
+
+// Get campus by ID
+app.get("/api/campuses/:id", auth, async (req, res) => {
+  try {
+    const campus = await Campus.findById(req.params.id);
+    if (!campus) {
+      return res.status(404).json({ message: "Không tìm thấy cơ sở" });
+    }
+    res.json(campus);
+  } catch (error) {
+    console.error("Error fetching campus:", error);
+    res.status(500).json({ message: "Lỗi khi tải thông tin cơ sở" });
+  }
+});
+
+// Create new campus (admin only)
+app.post("/api/campuses", auth, adminOnly, async (req, res) => {
+  try {
+    const { name, address, description } = req.body;
+
+    if (!name || !address) {
+      return res.status(400).json({
+        message: "Vui lòng cung cấp tên và địa chỉ cơ sở",
+      });
+    }
+
+    // Check if campus with the same name already exists
+    const existingCampus = await Campus.findOne({ name });
+    if (existingCampus) {
+      return res.status(400).json({ message: "Tên cơ sở đã tồn tại" });
+    }
+
+    const newCampus = new Campus({
+      name,
+      address,
+      description,
+    });
+
+    const savedCampus = await newCampus.save();
+    res.status(201).json(savedCampus);
+  } catch (error) {
+    console.error("Error creating campus:", error);
+    res.status(500).json({ message: "Lỗi khi tạo cơ sở mới" });
+  }
+});
+
+// Update campus (admin only)
+app.put("/api/campuses/:id", auth, adminOnly, async (req, res) => {
+  try {
+    const { name, address, description } = req.body;
+
+    if (!name || !address) {
+      return res.status(400).json({
+        message: "Vui lòng cung cấp tên và địa chỉ cơ sở",
+      });
+    }
+
+    // Check if update would create a duplicate name
+    const existingCampus = await Campus.findOne({
+      name,
+      _id: { $ne: req.params.id },
+    });
+
+    if (existingCampus) {
+      return res.status(400).json({ message: "Tên cơ sở đã tồn tại" });
+    }
+
+    const updatedCampus = await Campus.findByIdAndUpdate(
+      req.params.id,
+      { name, address, description },
+      { new: true }
+    );
+
+    if (!updatedCampus) {
+      return res.status(404).json({ message: "Không tìm thấy cơ sở" });
+    }
+
+    res.json(updatedCampus);
+  } catch (error) {
+    console.error("Error updating campus:", error);
+    res.status(500).json({ message: "Lỗi khi cập nhật cơ sở" });
+  }
+});
+
+// Delete campus (admin only)
+app.delete("/api/campuses/:id", auth, adminOnly, async (req, res) => {
+  try {
+    // Check if campus is associated with any rooms
+    const roomCount = await Room.countDocuments({ campus: req.params.id });
+    if (roomCount > 0) {
+      return res.status(400).json({
+        message:
+          "Không thể xóa cơ sở đang có phòng học. Vui lòng xóa tất cả phòng học trước.",
+      });
+    }
+
+    // Check if campus is associated with any classes
+    const classCount = await Class.countDocuments({ campus: req.params.id });
+    if (classCount > 0) {
+      return res.status(400).json({
+        message:
+          "Không thể xóa cơ sở đang có lớp học. Vui lòng thay đổi cơ sở của các lớp học trước.",
+      });
+    }
+
+    const deletedCampus = await Campus.findByIdAndDelete(req.params.id);
+    if (!deletedCampus) {
+      return res.status(404).json({ message: "Không tìm thấy cơ sở" });
+    }
+
+    res.json({ message: "Đã xóa cơ sở thành công" });
+  } catch (error) {
+    console.error("Error deleting campus:", error);
+    res.status(500).json({ message: "Lỗi khi xóa cơ sở" });
+  }
+});
+
+// ==================== ROOM ROUTES ====================
+
+// Get all rooms with optional campus filter
+app.get("/api/rooms", async (req, res) => {
+  try {
+    const { campus } = req.query;
+
+    let query = {};
+    if (campus) {
+      query.campus = campus;
+    }
+
+    const rooms = await Room.find(query)
+      .populate("campus", "name")
+      .sort({ building: 1, floor: 1, number: 1 });
+
+    res.json(rooms);
+  } catch (error) {
+    console.error("Error fetching rooms:", error);
+    res.status(500).json({ message: "Lỗi khi tải danh sách phòng học" });
+  }
+});
+
+// Test endpoint for rooms API
+app.get("/api/rooms/test", async (req, res) => {
+  res.send("Hello World");
+});
+
+// Get room by ID
+app.get("/api/rooms/:id", auth, async (req, res) => {
+  try {
+    const room = await Room.findById(req.params.id).populate("campus", "name");
+    if (!room) {
+      return res.status(404).json({ message: "Không tìm thấy phòng học" });
+    }
+    res.json(room);
+  } catch (error) {
+    console.error("Error fetching room:", error);
+    res.status(500).json({ message: "Lỗi khi tải thông tin phòng học" });
+  }
+});
+
+// Create new room (admin only)
+app.post("/api/rooms", auth, adminOnly, async (req, res) => {
+  try {
+    const {
+      name,
+      number,
+      floor,
+      building,
+      campus,
+      capacity,
+      features,
+      description,
+    } = req.body;
+
+    if (!name || !number || !floor || !building || !campus || !capacity) {
+      return res.status(400).json({
+        message: "Vui lòng cung cấp đầy đủ thông tin phòng học",
+      });
+    }
+
+    // Check if campus exists
+    const campusExists = await Campus.findById(campus);
+    if (!campusExists) {
+      return res.status(400).json({ message: "Cơ sở không tồn tại" });
+    }
+
+    // Check for duplicate room
+    const existingRoom = await Room.findOne({
+      number,
+      floor,
+      building,
+      campus,
+    });
+
+    if (existingRoom) {
+      return res.status(400).json({
+        message: "Phòng học này đã tồn tại ở cơ sở này",
+      });
+    }
+
+    const newRoom = new Room({
+      name,
+      number,
+      floor,
+      building,
+      campus,
+      capacity: parseInt(capacity),
+      features: features || {
+        hasProjector: false,
+        hasAirConditioner: false,
+        hasComputers: false,
+      },
+      description,
+    });
+
+    const savedRoom = await newRoom.save();
+    const populatedRoom = await Room.findById(savedRoom._id).populate(
+      "campus",
+      "name"
+    );
+
+    res.status(201).json(populatedRoom);
+  } catch (error) {
+    console.error("Error creating room:", error);
+    res.status(500).json({ message: "Lỗi khi tạo phòng học mới" });
+  }
+});
+
+// Update room (admin only)
+app.put("/api/rooms/:id", auth, adminOnly, async (req, res) => {
+  try {
+    const {
+      name,
+      number,
+      floor,
+      building,
+      campus,
+      capacity,
+      features,
+      description,
+    } = req.body;
+
+    if (!name || !number || !floor || !building || !campus || !capacity) {
+      return res.status(400).json({
+        message: "Vui lòng cung cấp đầy đủ thông tin phòng học",
+      });
+    }
+
+    // Check if campus exists
+    const campusExists = await Campus.findById(campus);
+    if (!campusExists) {
+      return res.status(400).json({ message: "Cơ sở không tồn tại" });
+    }
+
+    // Check for duplicate room but not this one
+    const existingRoom = await Room.findOne({
+      number,
+      floor,
+      building,
+      campus,
+      _id: { $ne: req.params.id },
+    });
+
+    if (existingRoom) {
+      return res.status(400).json({
+        message: "Phòng học này đã tồn tại ở cơ sở này",
+      });
+    }
+
+    const updatedRoom = await Room.findByIdAndUpdate(
+      req.params.id,
+      {
+        name,
+        number,
+        floor,
+        building,
+        campus,
+        capacity: parseInt(capacity),
+        features,
+        description,
+      },
+      { new: true }
+    ).populate("campus", "name");
+
+    if (!updatedRoom) {
+      return res.status(404).json({ message: "Không tìm thấy phòng học" });
+    }
+
+    res.json(updatedRoom);
+  } catch (error) {
+    console.error("Error updating room:", error);
+    res.status(500).json({ message: "Lỗi khi cập nhật phòng học" });
+  }
+});
+
+// Delete room (admin only)
+app.delete("/api/rooms/:id", auth, adminOnly, async (req, res) => {
+  try {
+    // Check if room is associated with any classes
+    const classCount = await Class.countDocuments({ room: req.params.id });
+    if (classCount > 0) {
+      return res.status(400).json({
+        message:
+          "Không thể xóa phòng học đang được sử dụng cho lớp học. Vui lòng thay đổi phòng học của các lớp trước.",
+      });
+    }
+
+    const deletedRoom = await Room.findByIdAndDelete(req.params.id);
+    if (!deletedRoom) {
+      return res.status(404).json({ message: "Không tìm thấy phòng học" });
+    }
+
+    res.json({ message: "Đã xóa phòng học thành công" });
+  } catch (error) {
+    console.error("Error deleting room:", error);
+    res.status(500).json({ message: "Lỗi khi xóa phòng học" });
+  }
+});
+// Xóa sinh viên (Chuẩn RESTful API)
+app.delete("/api/students/:id", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(
+      `User ${req.account.name} (${req.account.role}) attempting to delete student with ID: ${id}`
+    );
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID sinh viên không hợp lệ",
+        studentId: id,
+      });
+    }
+
+    // Tìm sinh viên
+    const student = await Student.findById(id);
+    if (!student) {
+      return res.status(404).json({
+        message: "Không tìm thấy sinh viên",
+        studentId: id,
+      });
+    }
+
+    // Kiểm tra quyền hạn: Admin hoặc giảng viên chủ nhiệm của lớp
+    if (req.account.role !== "admin") {
+      // Nếu sinh viên thuộc lớp quản lý, kiểm tra xem người dùng có phải là giáo viên chủ nhiệm không
+      if (student.adminClass) {
+        const adminClass = await AdminClass.findById(student.adminClass);
+        if (
+          !adminClass ||
+          !adminClass.mainTeacher ||
+          adminClass.mainTeacher.toString() !== req.account._id.toString()
+        ) {
+          return res.status(403).json({
+            message: "Bạn không có quyền xóa sinh viên này",
+          });
+        }
+      } else {
+        return res.status(403).json({
+          message: "Bạn không có quyền xóa sinh viên này",
+        });
+      }
+    }
+
+    // Lưu classId để cập nhật sau khi xóa
+    const adminClassId = student.adminClass;
+    const regularClassIds = student.classes || [];
+    console.log(
+      `Student classes: Admin=${adminClassId}, Regular=${regularClassIds.join(
+        ", "
+      )}`
+    );
+
+    // 1. Xóa các bản ghi điểm danh liên quan đến sinh viên
+    const attendanceUpdates = await Attendance.updateMany(
+      { "students.student": id },
+      { $pull: { students: { student: id } } }
+    );
+    console.log(
+      `Updated ${attendanceUpdates.modifiedCount} attendance records`
+    );
+
+    // 2. Xóa sinh viên
+    await Student.findByIdAndDelete(id);
+    console.log(`Student with ID ${id} deleted successfully`);
+
+    // 3. Cập nhật số lượng sinh viên trong lớp quản lý
+    if (adminClassId) {
+      await AdminClass.updateStudentCount(adminClassId);
+      console.log(`Updated student count for admin class ${adminClassId}`);
+    }
+
+    // 4. Cập nhật các lớp học thông thường
+    for (const classId of regularClassIds) {
+      // Xóa tham chiếu sinh viên từ lớp học
+      await Class.findByIdAndUpdate(
+        classId,
+        { $pull: { students: id } },
+        { new: true }
+      );
+
+      // Cập nhật số lượng sinh viên
+      const classDoc = await Class.findById(classId);
+      if (classDoc) {
+        classDoc.studentCount = classDoc.students
+          ? classDoc.students.length
+          : 0;
+        await classDoc.save();
+        console.log(
+          `Updated student count for class ${classId}: ${classDoc.studentCount}`
+        );
+      }
+    }
+
+    res.json({
+      message: "Đã xóa sinh viên thành công",
+      studentInfo: {
+        id: student._id,
+        name: student.name,
+        studentId: student.studentId,
+      },
+      updates: {
+        attendanceRecords: attendanceUpdates.modifiedCount,
+        adminClass: adminClassId ? true : false,
+        regularClasses: regularClassIds.length,
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting student:", error);
+    res.status(500).json({
+      message: "Lỗi khi xóa sinh viên",
+      error: error.message,
+    });
+  }
+});
+
+// ==================== API ROUTES RESTRUCTURED ====================
+
+// ===== ADMIN ROUTES =====
+
+// Lấy tất cả sinh viên trong hệ thống
+app.get("/api/admin/students", auth, adminOnly, async (req, res) => {
+  try {
+    const students = await Student.find()
+      .populate("adminClass", "name code entryYear department")
+      .sort({ adminClass: 1, name: 1 });
+
+    res.json(students);
+  } catch (error) {
+    console.error("Error fetching all students:", error);
+    res.status(500).json({
+      message: "Lỗi khi lấy danh sách sinh viên",
+      error: error.message,
+    });
+  }
+});
+
+// Thêm sinh viên vào lớp chính (AdminClass)
+app.post(
+  "/api/admin/classes/:classId/students",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const { classId } = req.params;
+      const { name, studentId, email, phone, gender } = req.body;
+
+      if (!isValidObjectId(classId)) {
+        return res.status(400).json({
+          message: "ID lớp chính không hợp lệ",
+        });
+      }
+
+      // Kiểm tra lớp tồn tại
+      const adminClass = await AdminClass.findById(classId);
+      if (!adminClass) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp chính",
+        });
+      }
+
+      // Kiểm tra sinh viên đã tồn tại trong hệ thống chưa
+      const existingStudent = await Student.findOne({ studentId });
+      if (existingStudent) {
+        // Nếu sinh viên đã thuộc lớp này
+        if (
+          existingStudent.adminClass &&
+          existingStudent.adminClass.toString() === classId
+        ) {
+          return res.status(400).json({
+            message: "Sinh viên đã thuộc lớp chính này",
+            studentInfo: existingStudent,
+          });
+        }
+
+        return res.status(400).json({
+          message: "Mã sinh viên đã tồn tại trong hệ thống",
+          studentInfo: existingStudent,
+        });
+      }
+
+      // Tạo sinh viên mới
+      const newStudent = new Student({
+        name,
+        studentId,
+        email: email || `${studentId}@example.com`,
+        phone,
+        gender: gender || "male",
+        adminClass: classId,
+        active: true,
+      });
+
+      await newStudent.save();
+
+      // Cập nhật số lượng sinh viên trong lớp
+      await AdminClass.updateStudentCount(classId);
+
+      res.status(201).json({
+        message: "Đã thêm sinh viên vào lớp chính thành công",
+        student: newStudent,
+      });
+    } catch (error) {
+      console.error("Error adding student to admin class:", error);
+      res.status(500).json({
+        message: "Lỗi khi thêm sinh viên vào lớp chính",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Xóa sinh viên khỏi hệ thống (xóa hoàn toàn)
+app.delete(
+  "/api/admin/students/:studentId",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const { studentId } = req.params;
+
+      if (!isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID sinh viên không hợp lệ",
+        });
+      }
+
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+        });
+      }
+
+      // Lưu thông tin các lớp của sinh viên
+      const adminClassId = student.adminClass;
+      const regularClassIds = student.classes || [];
+
+      // 1. Xóa sinh viên khỏi các bản ghi điểm danh
+      await Attendance.updateMany(
+        { "students.student": studentId },
+        { $pull: { students: { student: studentId } } }
+      );
+
+      // 2. Xóa sinh viên khỏi các lớp học
+      for (const classId of regularClassIds) {
+        await Class.findByIdAndUpdate(classId, {
+          $pull: { students: studentId },
+        });
+
+        // Cập nhật số lượng sinh viên
+        const classDoc = await Class.findById(classId);
+        if (classDoc) {
+          classDoc.studentCount = classDoc.students
+            ? classDoc.students.length
+            : 0;
+          await classDoc.save();
+        }
+      }
+
+      // 3. Xóa sinh viên
+      await Student.findByIdAndDelete(studentId);
+
+      // 4. Cập nhật số sinh viên trong lớp chính
+      if (adminClassId) {
+        await AdminClass.updateStudentCount(adminClassId);
+      }
+
+      res.json({
+        message: "Đã xóa sinh viên khỏi hệ thống thành công",
+        studentInfo: {
+          id: student._id,
+          name: student.name,
+          studentId: student.studentId,
+        },
+      });
+    } catch (error) {
+      console.error("Error deleting student from system:", error);
+      res.status(500).json({
+        message: "Lỗi khi xóa sinh viên khỏi hệ thống",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Gỡ sinh viên khỏi lớp chính (không xóa sinh viên khỏi hệ thống)
+app.delete(
+  "/api/admin/classes/:classId/students/:studentId",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+
+      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID không hợp lệ",
+        });
+      }
+
+      // Kiểm tra lớp và sinh viên tồn tại
+      const adminClass = await AdminClass.findById(classId);
+      if (!adminClass) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp chính",
+        });
+      }
+
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+        });
+      }
+
+      // Kiểm tra sinh viên có thuộc lớp này không
+      if (!student.adminClass || student.adminClass.toString() !== classId) {
+        return res.status(400).json({
+          message: "Sinh viên không thuộc lớp chính này",
+        });
+      }
+
+      // Cập nhật sinh viên: gỡ khỏi lớp chính nhưng giữ trong hệ thống
+      student.adminClass = null;
+      await student.save();
+
+      // Cập nhật số lượng sinh viên trong lớp
+      await AdminClass.updateStudentCount(classId);
+
+      res.json({
+        message: "Đã gỡ sinh viên khỏi lớp chính thành công",
+        studentInfo: {
+          id: student._id,
+          name: student.name,
+          studentId: student.studentId,
+        },
+      });
+    } catch (error) {
+      console.error("Error removing student from admin class:", error);
+      res.status(500).json({
+        message: "Lỗi khi gỡ sinh viên khỏi lớp chính",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// ===== TEACHER ROUTES =====
+
+// Lấy danh sách sinh viên trong lớp học
+app.get("/api/teacher/classes/:classId/students", auth, async (req, res) => {
+  try {
+    const { classId } = req.params;
+
+    if (!isValidObjectId(classId)) {
+      return res.status(400).json({
+        message: "ID lớp học không hợp lệ",
+      });
+    }
+
+    // Kiểm tra lớp tồn tại
+    const classObj = await Class.findById(classId);
+    if (!classObj) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp học",
+      });
+    }
+
+    // Kiểm tra quyền: admin hoặc giáo viên phụ trách lớp
+    if (
+      req.account.role !== "admin" &&
+      classObj.teacher.toString() !== req.account._id.toString()
+    ) {
+      return res.status(403).json({
+        message: "Bạn không có quyền xem danh sách sinh viên của lớp này",
+      });
+    }
+
+    // Lấy danh sách sinh viên
+    const students = await Student.find({ classes: { $in: [classId] } })
+      .populate("adminClass", "name code")
+      .sort({ name: 1 });
+
+    res.json(students);
+  } catch (error) {
+    console.error("Error fetching students in class:", error);
+    res.status(500).json({
+      message: "Lỗi khi lấy danh sách sinh viên trong lớp",
+      error: error.message,
+    });
+  }
+});
+
+// Thêm sinh viên vào lớp học (sinh viên phải đã tồn tại trong hệ thống)
+app.post("/api/teacher/classes/:classId/students", auth, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { studentIds } = req.body; // Mảng các ID sinh viên cần thêm vào lớp
+
+    if (!isValidObjectId(classId)) {
+      return res.status(400).json({
+        message: "ID lớp học không hợp lệ",
+      });
+    }
+
+    if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({
+        message: "Danh sách sinh viên không hợp lệ",
+      });
+    }
+
+    // Kiểm tra lớp tồn tại
+    const classObj = await Class.findById(classId);
+    if (!classObj) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp học",
+      });
+    }
+
+    // Kiểm tra quyền: admin hoặc giáo viên phụ trách lớp
+    if (
+      req.account.role !== "admin" &&
+      classObj.teacher.toString() !== req.account._id.toString()
+    ) {
+      return res.status(403).json({
+        message: "Bạn không có quyền thêm sinh viên vào lớp này",
+      });
+    }
+
+    const addedStudents = [];
+    const existingStudents = [];
+    const notFoundStudents = [];
+
+    // Xử lý từng sinh viên
+    for (const studentId of studentIds) {
+      if (!isValidObjectId(studentId)) {
+        notFoundStudents.push(studentId);
+        continue;
+      }
+
+      // Kiểm tra sinh viên tồn tại
+      const student = await Student.findById(studentId);
+      if (!student) {
+        notFoundStudents.push(studentId);
+        continue;
+      }
+
+      // Kiểm tra sinh viên đã thuộc lớp này chưa
+      if (student.classes && student.classes.includes(classId)) {
+        existingStudents.push({
+          id: student._id,
+          name: student.name,
+          studentId: student.studentId,
+        });
+        continue;
+      }
+
+      // Thêm lớp vào danh sách lớp của sinh viên
+      if (!student.classes) {
+        student.classes = [classId];
+      } else {
+        student.classes.push(classId);
+      }
+
+      await student.save();
+
+      // Thêm sinh viên vào danh sách sinh viên của lớp
+      if (!classObj.students) {
+        classObj.students = [studentId];
+      } else {
+        classObj.students.push(studentId);
+      }
+
+      addedStudents.push({
+        id: student._id,
+        name: student.name,
+        studentId: student.studentId,
+      });
+    }
+
+    // Cập nhật số lượng sinh viên trong lớp
+    classObj.studentCount = classObj.students ? classObj.students.length : 0;
+    await classObj.save();
+
+    res.json({
+      message: "Đã thêm sinh viên vào lớp học",
+      addedCount: addedStudents.length,
+      addedStudents,
+      existingStudents,
+      notFoundStudents,
+    });
+  } catch (error) {
+    console.error("Error adding students to class:", error);
+    res.status(500).json({
+      message: "Lỗi khi thêm sinh viên vào lớp học",
+      error: error.message,
+    });
+  }
+});
+
+// Xóa sinh viên khỏi lớp học (không xóa sinh viên khỏi hệ thống)
+app.delete(
+  "/api/teacher/classes/:classId/students/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+
+      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID không hợp lệ",
+        });
+      }
+
+      // Kiểm tra lớp tồn tại
+      const classObj = await Class.findById(classId);
+      if (!classObj) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp học",
+        });
+      }
+
+      // Kiểm tra quyền: admin hoặc giáo viên phụ trách lớp
+      if (
+        req.account.role !== "admin" &&
+        classObj.teacher.toString() !== req.account._id.toString()
+      ) {
+        return res.status(403).json({
+          message: "Bạn không có quyền xóa sinh viên khỏi lớp này",
+        });
+      }
+
+      // Kiểm tra sinh viên tồn tại
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+        });
+      }
+
+      // Kiểm tra sinh viên có thuộc lớp này không
+      if (!student.classes || !student.classes.includes(classId)) {
+        return res.status(400).json({
+          message: "Sinh viên không thuộc lớp học này",
+        });
+      }
+
+      // 1. Xóa lớp khỏi danh sách lớp của sinh viên
+      student.classes = student.classes.filter(
+        (id) => id.toString() !== classId
+      );
+      await student.save();
+
+      // 2. Xóa sinh viên khỏi danh sách sinh viên của lớp
+      classObj.students = classObj.students.filter(
+        (id) => id.toString() !== studentId
+      );
+      classObj.studentCount = classObj.students.length;
+      await classObj.save();
+
+      // 3. Xử lý điểm danh nếu cần thiết
+      // Nếu muốn giữ lại lịch sử điểm danh, không cần xóa
+      // Nếu muốn xóa lịch sử điểm danh:
+      // await Attendance.updateMany(
+      //   { class: classId, 'students.student': studentId },
+      //   { $pull: { students: { student: studentId } } }
+      // );
+
+      res.json({
+        message: "Đã xóa sinh viên khỏi lớp học thành công",
+        studentInfo: {
+          id: student._id,
+          name: student.name,
+          studentId: student.studentId,
+        },
+      });
+    } catch (error) {
+      console.error("Error removing student from class:", error);
+      res.status(500).json({
+        message: "Lỗi khi xóa sinh viên khỏi lớp học",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// ===== STUDENT ROUTES =====
+
+// Lấy thông tin các lớp học của sinh viên
+app.get("/api/student/classes", auth, async (req, res) => {
+  try {
+    if (req.account.role !== "student") {
+      return res.status(403).json({
+        message: "Chỉ sinh viên mới có thể sử dụng API này",
+      });
+    }
+
+    // Tìm thông tin sinh viên từ tài khoản
+    const student = await Student.findOne({ accountId: req.account._id });
+    if (!student) {
+      return res.status(404).json({
+        message: "Không tìm thấy thông tin sinh viên",
+      });
+    }
+
+    // Nếu sinh viên không có lớp nào
+    if (!student.classes || student.classes.length === 0) {
+      return res.json([]);
+    }
+
+    // Lấy danh sách các lớp học của sinh viên
+    const classes = await Class.find({ _id: { $in: student.classes } })
+      .populate("teacher", "name email phone")
+      .sort({ createdAt: -1 });
+
+    res.json(classes);
+  } catch (error) {
+    console.error("Error fetching student's classes:", error);
+    res.status(500).json({
+      message: "Lỗi khi lấy danh sách lớp học của sinh viên",
+      error: error.message,
+    });
+  }
+});
+
+// Kết thúc API cấu trúc mới
+// ... existing code (routes that should remain) ...
+
+/* ==================== TEACHER CLASSES API ROUTES ==================== */
+// API routes for teacher's regular classes management
+// GET - Get classes for teacher
+app.get("/api/teacher/classes", auth, async (req, res) => {
+  try {
+    // Kiểm tra quyền - Chỉ giảng viên và admin mới được xem danh sách lớp
+    if (req.account.role !== "teacher" && req.account.role !== "admin") {
+      return res
+        .status(403)
+        .json({ message: "Không có quyền xem danh sách lớp" });
+    }
+
+    let query = {};
+
+    // Nếu là admin, có thể xem tất cả lớp
+    if (req.account.role !== "admin") {
+      // Nếu là giảng viên, chỉ xem các lớp mình phụ trách
+      query.teacher = req.account._id;
+    }
+
+    const classes = await Class.find(query)
+      .populate("teacher", "name email")
+      .sort({ createdAt: -1 });
+
+    res.json(classes);
+  } catch (error) {
+    console.error("Error fetching classes:", error);
+    res.status(500).json({ message: "Lỗi khi tải danh sách lớp học" });
+  }
+});
+
+// GET - Get specific class for teacher
+app.get("/api/teacher/classes/:id", auth, async (req, res) => {
+  try {
+    const classItem = await Class.findById(req.params.id).populate(
+      "teacher",
+      "name email"
+    );
+
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền - Giảng viên chỉ xem được lớp mình phụ trách
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher._id.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không có quyền xem lớp này" });
+    }
+
+    res.json(classItem);
+  } catch (error) {
+    console.error("Error fetching class:", error);
+    res.status(500).json({ message: "Lỗi khi tải thông tin lớp học" });
+  }
+});
+
+// POST - Create class (for teacher)
+app.post("/api/teacher/classes", auth, async (req, res) => {
+  try {
+    // Kiểm tra quyền - Chỉ giảng viên và admin mới được tạo lớp
+    if (req.account.role !== "teacher" && req.account.role !== "admin") {
+      return res.status(403).json({ message: "Không có quyền tạo lớp học" });
+    }
+
+    const { name, code, subject, semester, schoolYear, adminClass } = req.body;
+
+    // Kiểm tra xem mã lớp đã tồn tại chưa
+    const existingClass = await Class.findOne({ code });
+    if (existingClass) {
+      return res.status(400).json({ message: "Mã lớp đã tồn tại" });
+    }
+
+    // Tạo lớp mới
+    const newClass = new Class({
+      name,
+      code,
+      subject,
+      semester,
+      schoolYear,
+      adminClass,
+      teacher: req.account._id, // Giảng viên tạo lớp sẽ là giáo viên phụ trách
+      studentCount: 0,
+    });
+
+    const savedClass = await newClass.save();
+    res.status(201).json(savedClass);
+  } catch (error) {
+    console.error("Error creating class:", error);
+    res.status(500).json({ message: "Lỗi khi tạo lớp học" });
+  }
+});
+
+// PUT - Update class
+app.put("/api/teacher/classes/:id", auth, async (req, res) => {
+  try {
+    const classItem = await Class.findById(req.params.id);
+
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không có quyền cập nhật lớp này" });
+    }
+
+    const { name, subject, semester, schoolYear, adminClass } = req.body;
+
+    // Cập nhật thông tin lớp
+    if (name) classItem.name = name;
+    if (subject) classItem.subject = subject;
+    if (semester) classItem.semester = semester;
+    if (schoolYear) classItem.schoolYear = schoolYear;
+    if (adminClass) classItem.adminClass = adminClass;
+
+    const updatedClass = await classItem.save();
+    res.json(updatedClass);
+  } catch (error) {
+    console.error("Error updating class:", error);
+    res.status(500).json({ message: "Lỗi khi cập nhật lớp học" });
+  }
+});
+
+// DELETE - Delete class
+app.delete("/api/teacher/classes/:id", auth, async (req, res) => {
+  try {
+    const classItem = await Class.findById(req.params.id);
+
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không có quyền xóa lớp này" });
+    }
+
+    // Kiểm tra xem lớp đã có điểm danh chưa
+    const hasAttendance = await Attendance.findOne({ class: req.params.id });
+    if (hasAttendance) {
+      return res
+        .status(400)
+        .json({ message: "Không thể xóa lớp đã có dữ liệu điểm danh" });
+    }
+
+    // Xóa lớp
+    await Class.findByIdAndDelete(req.params.id);
+
+    res.json({ message: "Xóa lớp học thành công" });
+  } catch (error) {
+    console.error("Error deleting class:", error);
+    res.status(500).json({ message: "Lỗi khi xóa lớp học" });
+  }
+});
+
+// GET - Get students in a class
+app.get("/api/teacher/classes/:id/students", auth, async (req, res) => {
+  try {
+    const classItem = await Class.findById(req.params.id);
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không có quyền xem sinh viên của lớp này" });
+    }
+
+    const students = await ClassStudent.find({
+      class: req.params.id,
+    })
+      .populate("student", "name studentId email phone gender")
+      .sort({ "student.name": 1 });
+
+    res.json(students);
+  } catch (error) {
+    console.error("Error fetching students:", error);
+    res.status(500).json({ message: "Lỗi khi tải danh sách sinh viên" });
+  }
+});
+
+// POST - Add students to class
+app.post("/api/teacher/classes/:id/students", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const classItem = await Class.findById(id);
+
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không có quyền thêm sinh viên vào lớp này" });
+    }
+
+    const { studentIds } = req.body;
+
+    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+      return res
+        .status(400)
+        .json({ message: "Danh sách sinh viên không hợp lệ" });
+    }
+
+    // Kiểm tra sinh viên đã tồn tại trong lớp chưa
+    const existingStudents = await ClassStudent.find({
+      class: id,
+      student: { $in: studentIds },
+    });
+
+    // Lọc ra các sinh viên chưa có trong lớp
+    const existingStudentIds = existingStudents.map((item) =>
+      item.student.toString()
+    );
+    const newStudentIds = studentIds.filter(
+      (studentId) => !existingStudentIds.includes(studentId)
+    );
+
+    // Thêm sinh viên mới vào lớp
+    const newClassStudents = newStudentIds.map((studentId) => ({
+      class: id,
+      student: studentId,
+    }));
+
+    if (newClassStudents.length > 0) {
+      await ClassStudent.insertMany(newClassStudents);
+
+      // Cập nhật số lượng sinh viên trong lớp
+      classItem.studentCount = await ClassStudent.countDocuments({ class: id });
+      await classItem.save();
+    }
+
+    res.json({
+      message: `Đã thêm ${newClassStudents.length} sinh viên vào lớp`,
+      addedCount: newClassStudents.length,
+      skippedCount: studentIds.length - newClassStudents.length,
+    });
+  } catch (error) {
+    console.error("Error adding students to class:", error);
+    res.status(500).json({ message: "Lỗi khi thêm sinh viên vào lớp" });
+  }
+});
+
+// DELETE - Remove student from class
+app.delete(
+  "/api/teacher/classes/:classId/students/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+
+      const classItem = await Class.findById(classId);
+      if (!classItem) {
+        return res.status(404).json({ message: "Không tìm thấy lớp học" });
+      }
+
+      // Kiểm tra quyền
+      if (
+        req.account.role !== "admin" &&
+        (!classItem.teacher ||
+          classItem.teacher.toString() !== req.account._id.toString())
+      ) {
+        return res
+          .status(403)
+          .json({ message: "Bạn không có quyền xóa sinh viên khỏi lớp này" });
+      }
+
+      // Kiểm tra xem sinh viên đã có điểm danh trong lớp chưa
+      const hasAttendance = await AttendanceRecord.findOne({
+        student: studentId,
+        class: classId,
+      });
+
+      if (hasAttendance) {
+        return res
+          .status(400)
+          .json({ message: "Không thể xóa sinh viên đã có dữ liệu điểm danh" });
+      }
+
+      // Xóa sinh viên khỏi lớp
+      const result = await ClassStudent.findOneAndDelete({
+        class: classId,
+        student: studentId,
+      });
+
+      if (!result) {
+        return res
+          .status(404)
+          .json({ message: "Sinh viên không tồn tại trong lớp" });
+      }
+
+      // Cập nhật số lượng sinh viên trong lớp
+      classItem.studentCount = await ClassStudent.countDocuments({
+        class: classId,
+      });
+      await classItem.save();
+
+      res.json({ message: "Đã xóa sinh viên khỏi lớp học" });
+    } catch (error) {
+      console.error("Error removing student from class:", error);
+      res.status(500).json({ message: "Lỗi khi xóa sinh viên khỏi lớp" });
+    }
+  }
+);
+
+/* ==================== TEACHER ATTENDANCE API ROUTES ==================== */
+// API chuẩn hóa cho điểm danh
+// POST - Start attendance session
+app.post("/api/teacher/attendance/start", auth, async (req, res) => {
+  try {
+    // Kiểm tra quyền
+    if (req.account.role !== "teacher" && req.account.role !== "admin") {
+      return res.status(403).json({ message: "Không có quyền điểm danh" });
+    }
+
+    const { classId, date, startTime, endTime, title, description, location } =
+      req.body;
+
+    // Kiểm tra lớp học
+    const classItem = await Class.findById(classId);
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền đối với lớp
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không phải là giảng viên của lớp này" });
+    }
+
+    // Kiểm tra xem có buổi điểm danh nào đang diễn ra không
+    const activeAttendance = await Attendance.findOne({
+      class: classId,
+      status: "in_progress",
+    });
+
+    if (activeAttendance) {
+      return res
+        .status(400)
+        .json({ message: "Đã có buổi điểm danh đang diễn ra cho lớp này" });
+    }
+
+    // Tạo buổi điểm danh mới
+    const newAttendance = new Attendance({
+      class: classId,
+      date: date ? new Date(date) : new Date(),
+      startTime: startTime || new Date(),
+      endTime: endTime,
+      title: title || `Buổi điểm danh ${new Date().toLocaleDateString()}`,
+      description: description || "",
+      location: location || "",
+      status: "in_progress",
+      createdBy: req.account._id, // Sử dụng Account ID thay vì Teacher ID
+      students: [], // Sẽ được cập nhật khi sinh viên điểm danh
+    });
+
+    const savedAttendance = await newAttendance.save();
+
+    // Populate thông tin cơ bản để trả về
+    const populatedAttendance = await Attendance.findById(
+      savedAttendance._id
+    ).populate("class", "name code");
+
+    res.status(201).json({
+      message: "Đã bắt đầu buổi điểm danh",
+      attendance: populatedAttendance,
+    });
+  } catch (error) {
+    console.error("Error starting attendance:", error);
+    res.status(500).json({ message: "Lỗi khi bắt đầu buổi điểm danh" });
+  }
+});
+
+// PUT - Mark student as present
+app.put(
+  "/api/teacher/attendance/:attendanceId/student/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { attendanceId, studentId } = req.params;
+
+      // Kiểm tra ID buổi điểm danh hợp lệ
+      if (!isValidObjectId(attendanceId)) {
+        return res.status(400).json({
+          message: "ID buổi điểm danh không hợp lệ",
+          details: { providedAttendanceId: attendanceId },
+        });
+      }
+
+      // Kiểm tra ID sinh viên hợp lệ
+      if (!isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID sinh viên không hợp lệ",
+          details: { providedStudentId: studentId },
+        });
+      }
+
+      // Kiểm tra buổi điểm danh
+      const attendance = await Attendance.findById(attendanceId);
+      if (!attendance) {
+        return res.status(404).json({
+          message: "Không tìm thấy buổi điểm danh",
+          details: { attendanceId },
+        });
+      }
+
+      // Kiểm tra lớp học
+      const classItem = await Class.findById(attendance.class);
+      if (!classItem) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp học",
+          details: { classId: attendance.class },
+        });
+      }
+
+      // Kiểm tra quyền điểm danh
+      if (
+        req.account.role !== "admin" &&
+        (!classItem.teacher ||
+          classItem.teacher.toString() !== req.account._id.toString())
+      ) {
+        return res.status(403).json({
+          message: "Bạn không phải là giảng viên của lớp này",
+          details: {
+            teacherId: classItem.teacher?.toString(),
+            accountId: req.account._id.toString(),
+          },
+        });
+      }
+
+      // Kiểm tra trạng thái điểm danh
+      if (attendance.status !== "in_progress") {
+        return res.status(400).json({
+          message: "Buổi điểm danh đã kết thúc",
+          details: { status: attendance.status },
+        });
+      }
+
+      // Kiểm tra sinh viên
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+          details: { studentId },
+        });
+      }
+
+      // Kiểm tra sinh viên có trong lớp không
+      const classStudent = await ClassStudent.findOne({
+        class: attendance.class,
+        student: studentId,
+      });
+
+      if (!classStudent) {
+        // Thử phương pháp thay thế bằng việc kiểm tra trực tiếp từ model Student
+        const studentWithClass = await Student.findOne({
+          _id: studentId,
+          classes: { $in: [attendance.class] },
+        });
+
+        if (!studentWithClass) {
+          // Sinh viên không thuộc lớp theo cả hai phương pháp kiểm tra
+          return res.status(404).json({
+            message: "Sinh viên không thuộc lớp này",
+            details: {
+              classId: attendance.class.toString(),
+              className: classItem.name,
+              studentId,
+              studentName: student.name,
+              studentCode: student.studentId,
+            },
+          });
+        }
+
+        // Nếu tìm thấy trong model Student nhưng không có trong ClassStudent, tự động tạo ClassStudent
+        const newClassStudent = new ClassStudent({
+          class: attendance.class,
+          student: studentId,
+          enrollmentDate: new Date(),
+          status: "active",
+        });
+
+        try {
+          await newClassStudent.save();
+          console.log(
+            `Tự động tạo liên kết ClassStudent cho sinh viên ${student.name} với lớp ${classItem.name}`
+          );
+        } catch (error) {
+          console.error("Lỗi khi tạo liên kết ClassStudent:", error);
+          // Tiếp tục xử lý bất kể lỗi tạo liên kết
+        }
+      }
+
+      // Kiểm tra sinh viên đã được điểm danh chưa
+      let attendanceRecord = await AttendanceRecord.findOne({
+        attendance: attendanceId,
+        student: studentId,
+      });
+
+      if (attendanceRecord) {
+        // Cập nhật trạng thái điểm danh
+        attendanceRecord.present = true;
+        attendanceRecord.method = req.body.method || "manual";
+        attendanceRecord.recordTime = new Date();
+        if (req.body.note) attendanceRecord.note = req.body.note;
+
+        await attendanceRecord.save();
+      } else {
+        // Tạo bản ghi điểm danh mới
+        attendanceRecord = new AttendanceRecord({
+          attendance: attendanceId,
+          class: attendance.class,
+          student: studentId,
+          present: true,
+          method: req.body.method || "manual",
+          recordTime: new Date(),
+          note: req.body.note,
+        });
+
+        await attendanceRecord.save();
+      }
+
+      // Trả về thông tin đầy đủ
+      res.json({
+        message: "Đã điểm danh thành công",
+        record: attendanceRecord,
+        student: {
+          _id: student._id,
+          name: student.name,
+          studentId: student.studentId,
+        },
+      });
+    } catch (error) {
+      console.error("Error marking attendance:", error);
+      res.status(500).json({
+        message: "Lỗi khi đánh dấu điểm danh",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// PUT - Complete attendance session
+app.put("/api/teacher/attendance/:id/complete", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Kiểm tra ID hợp lệ
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID buổi điểm danh không hợp lệ",
+        details: { providedId: id },
+      });
+    }
+
+    const attendance = await Attendance.findById(id);
+
+    if (!attendance) {
+      return res.status(404).json({
+        message: "Không tìm thấy buổi điểm danh",
+        details: { attendanceId: id },
+      });
+    }
+
+    // Kiểm tra lớp học
+    const classItem = await Class.findById(attendance.class);
+    if (!classItem) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp học",
+        details: { classId: attendance.class },
+      });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message: "Bạn không phải là giảng viên của lớp này",
+        details: {
+          teacherId: classItem.teacher?.toString(),
+          accountId: req.account._id.toString(),
+        },
+      });
+    }
+
+    // Kiểm tra trạng thái hiện tại và cung cấp thông tin chi tiết hơn
+    if (attendance.status !== "in_progress") {
+      return res.status(400).json({
+        message: "Buổi điểm danh không ở trạng thái đang diễn ra",
+        details: {
+          currentStatus: attendance.status,
+          attendanceId: id,
+        },
+      });
+    }
+
+    // Cập nhật thông tin buổi điểm danh
+    attendance.status = "completed";
+    attendance.endTime = req.body.endTime || new Date();
+
+    // Đánh dấu vắng mặt cho các sinh viên chưa điểm danh
+    const classStudents = await ClassStudent.find({ class: attendance.class });
+    const attendedStudents = await AttendanceRecord.find({
+      attendance: req.params.id,
+    });
+
+    const attendedStudentIds = attendedStudents.map((record) =>
+      record.student.toString()
+    );
+    const absentStudentIds = classStudents
+      .map((item) => item.student.toString())
+      .filter((studentId) => !attendedStudentIds.includes(studentId));
+
+    // Tạo bản ghi vắng mặt cho các sinh viên chưa điểm danh
+    if (absentStudentIds.length > 0) {
+      const absentRecords = absentStudentIds.map((studentId) => ({
+        attendance: req.params.id,
+        class: attendance.class,
+        student: studentId,
+        present: false,
+        method: "auto",
+        recordTime: new Date(),
+      }));
+
+      await AttendanceRecord.insertMany(absentRecords);
+    }
+
+    // Lưu buổi điểm danh
+    await attendance.save();
+
+    // Tính tỷ lệ tham dự
+    const presentCount = await AttendanceRecord.countDocuments({
+      attendance: req.params.id,
+      present: true,
+    });
+
+    const totalCount = classStudents.length;
+    const attendanceRate =
+      totalCount > 0 ? (presentCount / totalCount) * 100 : 0;
+
+    res.json({
+      message: "Đã kết thúc buổi điểm danh",
+      attendance: {
+        ...attendance.toObject(),
+        stats: {
+          presentCount,
+          absentCount: totalCount - presentCount,
+          totalCount,
+          attendanceRate: Math.round(attendanceRate * 100) / 100,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error completing attendance:", error);
+    res.status(500).json({
+      message: "Lỗi khi kết thúc buổi điểm danh",
+      error: error.message,
+    });
+  }
+});
+
+// GET - Get attendance history for a class
+app.get("/api/teacher/attendance/class/:classId", auth, async (req, res) => {
+  try {
+    const { classId } = req.params;
+
+    // Kiểm tra lớp học
+    const classItem = await Class.findById(classId);
+    if (!classItem) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Bạn không phải là giảng viên của lớp này" });
+    }
+
+    // Lấy danh sách buổi điểm danh
+    const attendances = await Attendance.find({ class: classId }).sort({
+      date: -1,
+      startTime: -1,
+    });
+
+    // Tính tỷ lệ tham dự cho từng buổi
+    const attendanceWithStats = await Promise.all(
+      attendances.map(async (attendance) => {
+        const records = await AttendanceRecord.find({
+          attendance: attendance._id,
+        });
+        const presentCount = records.filter((record) => record.present).length;
+        const totalCount = records.length;
+        const attendanceRate =
+          totalCount > 0 ? (presentCount / totalCount) * 100 : 0;
+
+        return {
+          ...attendance.toObject(),
+          stats: {
+            presentCount,
+            absentCount: totalCount - presentCount,
+            totalCount,
+            attendanceRate: Math.round(attendanceRate * 100) / 100,
+          },
+        };
+      })
+    );
+
+    res.json(attendanceWithStats);
+  } catch (error) {
+    console.error("Error fetching attendance history:", error);
+    res.status(500).json({ message: "Lỗi khi tải lịch sử điểm danh" });
+  }
+});
+
+// Thêm API lấy thống kê điểm danh của lớp học dành cho giảng viên
+app.get("/api/teacher/classes/:id/attendance-stats", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { startDate, endDate } = req.query;
+
+    console.log("Fetching teacher attendance stats for class:", id, {
+      startDate,
+      endDate,
+    });
+
+    // Kiểm tra ID lớp
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "ID lớp học không hợp lệ" });
+    }
+
+    // Lấy thông tin lớp học kèm danh sách sinh viên
+    const classDoc = await Class.findById(id).populate({
+      path: "students",
+      select: "name studentId",
+    });
+
+    if (!classDoc) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra quyền truy cập: chỉ admin hoặc giảng viên của lớp được phép xem
+    if (
+      req.account.role !== "admin" &&
+      classDoc.teacher.toString() !== req.account._id.toString()
+    ) {
+      console.log("Unauthorized stats access by teacher:", req.account._id);
+      return res.status(403).json({
+        message: "Bạn không có quyền xem thống kê điểm danh của lớp học này",
+      });
+    }
+
+    // Tạo query để lọc theo ngày nếu có
+    const query = { class: id, status: "completed" };
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+
+      query.date = {
+        $gte: start,
+        $lte: end,
+      };
+      console.log("Filtering by date range:", query.date);
+    }
+
+    // Lấy dữ liệu điểm danh
+    const attendances = await Attendance.find(query);
+    console.log(`Found ${attendances.length} attendance records`);
+
+    // Tính thống kê cho từng sinh viên
+    const stats = {};
+    const sessionStats = {};
+
+    // Khởi tạo thống kê cho mỗi sinh viên
+    for (let student of classDoc.students || []) {
+      stats[student._id] = {
+        _id: student._id,
+        name: student.name,
+        studentId: student.studentId,
+        totalPresent: 0,
+        totalAbsent: 0,
+        totalSessions: attendances.length,
+        attendanceRate: 0,
+        totalScore: 0,
+        isBanned: false,
+        sessions: {},
+      };
+    }
+
+    // Tính thống kê cho mỗi buổi học
+    for (let attendance of attendances) {
+      const sessionId = attendance._id.toString();
+      sessionStats[sessionId] = {
+        _id: sessionId,
+        date: attendance.date,
+        sessionNumber: attendance.sessionNumber,
+        totalPresent: 0,
+        totalAbsent: 0,
+        presentRate: 0,
+      };
+
+      // Duyệt qua từng sinh viên trong buổi học
+      for (let student of attendance.students || []) {
+        const studentId = student.student.toString();
+        const isPresent = student.status === "present";
+
+        // Cập nhật thống kê của sinh viên
+        if (stats[studentId]) {
+          if (isPresent) {
+            stats[studentId].totalPresent++;
+            sessionStats[sessionId].totalPresent++;
+          } else {
+            stats[studentId].totalAbsent++;
+            sessionStats[sessionId].totalAbsent++;
+            stats[studentId].totalScore += student.score || 0;
+          }
+
+          // Lưu thông tin điểm danh theo buổi học
+          stats[studentId].sessions[sessionId] = {
+            present: isPresent,
+            score: student.score || 0,
+            date: attendance.date,
+            sessionNumber: attendance.sessionNumber,
+          };
+
+          // Cập nhật trạng thái cấm thi
+          if (student.isBanned) {
+            stats[studentId].isBanned = true;
+          }
+        }
+      }
+
+      // Tính tỷ lệ tham dự của buổi học
+      const totalStudents = classDoc.students ? classDoc.students.length : 0;
+      if (totalStudents > 0) {
+        sessionStats[sessionId].presentRate =
+          (sessionStats[sessionId].totalPresent / totalStudents) * 100;
+      }
+    }
+
+    // Tính tỷ lệ tham dự của mỗi sinh viên
+    for (let studentId in stats) {
+      const student = stats[studentId];
+      if (student.totalSessions > 0) {
+        student.attendanceRate =
+          (student.totalPresent / student.totalSessions) * 100;
+      }
+    }
+
+    // Trả về kết quả
+    res.json({
+      class: {
+        _id: classDoc._id,
+        name: classDoc.name,
+        code: classDoc.code,
+        totalStudents: classDoc.students ? classDoc.students.length : 0,
+        totalSessions: attendances.length,
+      },
+      students: Object.values(stats),
+      sessions: Object.values(sessionStats),
+      startDate: startDate || null,
+      endDate: endDate || null,
+    });
+  } catch (error) {
+    console.error("Error fetching teacher attendance stats:", error);
+    res.status(500).json({
+      message: "Lỗi khi lấy thống kê điểm danh",
+      error: error.message,
+    });
+  }
+});
+// API endpoint để lấy thống kê điểm danh của lớp học
+app.get("/api/classes/:id/attendance-stats", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "ID lớp học không hợp lệ",
+      });
+    }
+
+    // Kiểm tra lớp học tồn tại
+    const classDoc = await Class.findById(id);
+    if (!classDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Không tìm thấy lớp học",
+      });
+    }
+
+    // Lấy số lượng sinh viên trong lớp từ ClassStudent
+    const classStudentCount = await ClassStudent.countDocuments({ class: id });
+    // Nếu không có trong ClassStudent, lấy từ Class.studentCount hoặc Class.students.length
+    const totalStudentsInClass =
+      classStudentCount > 0
+        ? classStudentCount
+        : classDoc.studentCount ||
+          (classDoc.students ? classDoc.students.length : 0);
+
+    // Lấy thông tin các buổi điểm danh từ bảng Attendance
+    const attendanceSessions = await Attendance.find({ class: id }).sort({
+      sessionNumber: 1,
+    });
+
+    // Tính toán thống kê theo buổi học
+    const sessionStats = [];
+    const maxSessions = classDoc.sessions || 15; // Mặc định là 15 buổi nếu không có thông tin
+
+    // Tạo mảng các session number từ 1 đến maxSessions
+    for (let i = 1; i <= maxSessions; i++) {
+      // Tìm buổi điểm danh tương ứng nếu có
+      const sessionAttendance = attendanceSessions.find(
+        (record) => record.sessionNumber === i
+      );
+
+      if (sessionAttendance) {
+        // Lấy số liệu điểm danh từ AttendanceRecord
+        const attendanceRecords = await AttendanceRecord.find({
+          attendance: sessionAttendance._id,
+        });
+
+        const presentCount = attendanceRecords.filter(
+          (record) => record.present
+        ).length;
+        const absentCount = totalStudentsInClass - presentCount;
+        const attendanceRate =
+          totalStudentsInClass > 0
+            ? ((presentCount / totalStudentsInClass) * 100).toFixed(1)
+            : 0;
+
+        sessionStats.push({
+          sessionNumber: i,
+          totalStudents: totalStudentsInClass,
+          attendedCount: presentCount,
+          absentCount: absentCount,
+          attendanceRate: attendanceRate,
+          date: sessionAttendance.date || null,
+          status: sessionAttendance.status || "not_started",
+          id: sessionAttendance._id,
+        });
+      } else {
+        // Buổi học chưa có điểm danh
+        sessionStats.push({
+          sessionNumber: i,
+          totalStudents: totalStudentsInClass,
+          attendedCount: 0,
+          absentCount: totalStudentsInClass,
+          attendanceRate: 0,
+          date: null,
+          status: "not_started",
+          id: null,
+        });
+      }
+    }
+
+    return res.status(200).json(sessionStats);
+  } catch (error) {
+    console.error("Lỗi khi lấy thống kê điểm danh:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi máy chủ nội bộ",
+    });
+  }
+});
+
+// Đánh dấu điểm danh của sinh viên (API mới sử dụng AttendanceRecord)
+app.put("/api/attendance/:id/student/:studentId", async (req, res) => {
+  try {
+    const { id, studentId } = req.params;
+    const { present = true, method = "manual", note } = req.body;
+
+    console.log(
+      `Marking student ${studentId} as ${
+        present ? "present" : "absent"
+      } for attendance ${id}`
+    );
+
+    // Kiểm tra attendance ID có hợp lệ không
+    if (!isValidObjectId(id)) {
+      return res
+        .status(400)
+        .json({ message: "ID buổi điểm danh không hợp lệ" });
+    }
+
+    // Kiểm tra student ID có hợp lệ không
+    if (!isValidObjectId(studentId)) {
+      return res.status(400).json({ message: "ID sinh viên không hợp lệ" });
+    }
+
+    // Tìm buổi điểm danh
+    const attendance = await Attendance.findById(id);
+    if (!attendance) {
+      return res.status(404).json({ message: "Không tìm thấy buổi điểm danh" });
+    }
+
+    // Tìm lớp học
+    const classDoc = await Class.findById(attendance.class);
+    if (!classDoc) {
+      return res.status(404).json({ message: "Không tìm thấy lớp học" });
+    }
+
+    // Kiểm tra xem sinh viên có thuộc lớp học này không
+    const isStudentInClass = await ClassStudent.findOne({
+      class: attendance.class,
+      student: studentId,
+    });
+
+    if (!isStudentInClass) {
+      return res
+        .status(404)
+        .json({ message: "Sinh viên không thuộc lớp học này" });
+    }
+
+    // Tìm hoặc tạo bản ghi điểm danh
+    let record = await AttendanceRecord.findOne({
+      attendance: id,
+      student: studentId,
+    });
+
+    if (record) {
+      // Cập nhật bản ghi hiện có
+      record.present = present;
+      record.method = method;
+      record.recordTime = new Date();
+      if (note) record.note = note;
+    } else {
+      // Tạo bản ghi mới
+      record = new AttendanceRecord({
+        attendance: id,
+        class: attendance.class,
+        student: studentId,
+        present: present,
+        method: method,
+        recordTime: new Date(),
+        note: note,
+      });
+    }
+
+    // Lưu bản ghi điểm danh
+    await record.save();
+
+    // Trả về thông tin bản ghi điểm danh
+    res.json({
+      message: `Đã đánh dấu sinh viên ${present ? "có mặt" : "vắng mặt"}`,
+      record,
+    });
+  } catch (error) {
+    console.error("Error marking student attendance:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET - Get specific attendance session for a class by session number
+app.get("/api/teacher/classes/:classId/attendance", auth, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { sessionNumber, date } = req.query;
+
+    // Kiểm tra ID lớp học hợp lệ
+    if (!isValidObjectId(classId)) {
+      return res.status(400).json({
+        message: "ID lớp học không hợp lệ",
+        details: { providedId: classId },
+      });
+    }
+
+    // Kiểm tra lớp học
+    const classItem = await Class.findById(classId);
+    if (!classItem) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp học",
+        details: { classId },
+      });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message: "Bạn không phải là giảng viên của lớp này",
+        details: {
+          teacherId: classItem.teacher?.toString(),
+          accountId: req.account._id.toString(),
+        },
+      });
+    }
+
+    // Xây dựng query để tìm buổi điểm danh
+    const query = { class: classId };
+
+    // Nếu có sessionNumber, thêm vào query
+    if (sessionNumber) {
+      query.sessionNumber = parseInt(sessionNumber, 10);
+    }
+    // Nếu có date, thêm vào query
+    else if (date) {
+      const startDate = new Date(date);
+      startDate.setHours(0, 0, 0, 0);
+
+      const endDate = new Date(date);
+      endDate.setHours(23, 59, 59, 999);
+
+      query.date = { $gte: startDate, $lte: endDate };
+    }
+    // Yêu cầu ít nhất một tham số
+    else {
+      return res.status(400).json({
+        message: "Cần cung cấp số buổi học (sessionNumber) hoặc ngày (date)",
+        details: { params: req.query },
+      });
+    }
+
+    // Tìm buổi điểm danh cụ thể cho lớp này
+    const attendance = await Attendance.findOne(query);
+
+    if (!attendance) {
+      return res.status(404).json({
+        message: "Không tìm thấy buổi điểm danh",
+        details: {
+          query,
+          classId,
+          sessionNumber: sessionNumber || null,
+          date: date || null,
+        },
+      });
+    }
+
+    // Lấy danh sách điểm danh cho buổi này
+    const attendanceRecords = await AttendanceRecord.find({
+      attendance: attendance._id,
+    }).populate("student", "name studentId");
+
+    // Trả về dữ liệu đầy đủ
+    const result = {
+      ...attendance.toObject(),
+      records: attendanceRecords,
+    };
+
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching attendance session:", error);
+    res.status(500).json({
+      message: "Lỗi khi tải thông tin buổi điểm danh",
+      error: error.message,
+    });
+  }
+});
+
+// GET - Check attendance status
+app.get("/api/teacher/attendance/:id/status", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Kiểm tra ID hợp lệ
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID buổi điểm danh không hợp lệ",
+        details: { providedId: id },
+      });
+    }
+
+    const attendance = await Attendance.findById(id);
+
+    if (!attendance) {
+      return res.status(404).json({
+        message: "Không tìm thấy buổi điểm danh",
+        details: { attendanceId: id },
+      });
+    }
+
+    // Kiểm tra lớp học
+    const classItem = await Class.findById(attendance.class);
+    if (!classItem) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp học",
+        details: { classId: attendance.class },
+      });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message: "Bạn không phải là giảng viên của lớp này",
+        details: {
+          teacherId: classItem.teacher?.toString(),
+          accountId: req.account._id.toString(),
+        },
+      });
+    }
+
+    // Lấy số lượng bản ghi điểm danh
+    const recordCount = await AttendanceRecord.countDocuments({
+      attendance: id,
+    });
+
+    const presentCount = await AttendanceRecord.countDocuments({
+      attendance: id,
+      present: true,
+    });
+
+    // Trả về thông tin trạng thái
+    res.json({
+      attendanceId: id,
+      classId: attendance.class.toString(),
+      className: classItem.name,
+      status: attendance.status,
+      date: attendance.date,
+      startTime: attendance.startTime,
+      endTime: attendance.endTime,
+      sessionNumber: attendance.sessionNumber,
+      recordCount: recordCount,
+      presentCount: presentCount,
+      canComplete: attendance.status === "in_progress",
+      canRestart: attendance.status === "completed",
+    });
+  } catch (error) {
+    console.error("Error checking attendance status:", error);
+    res.status(500).json({
+      message: "Lỗi khi kiểm tra trạng thái buổi điểm danh",
+      error: error.message,
+    });
+  }
+});
+
+// API để đặt lại trạng thái buổi điểm danh (chỉ dành cho giảng viên và admin)
+app.put("/api/teacher/attendance/:id/reset", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Kiểm tra ID hợp lệ
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "ID buổi điểm danh không hợp lệ",
+        details: { providedId: id },
+      });
+    }
+
+    const attendance = await Attendance.findById(id);
+
+    if (!attendance) {
+      return res.status(404).json({
+        message: "Không tìm thấy buổi điểm danh",
+        details: { attendanceId: id },
+      });
+    }
+
+    // Kiểm tra lớp học
+    const classItem = await Class.findById(attendance.class);
+    if (!classItem) {
+      return res.status(404).json({
+        message: "Không tìm thấy lớp học",
+        details: { classId: attendance.class },
+      });
+    }
+
+    // Kiểm tra quyền
+    if (
+      req.account.role !== "admin" &&
+      (!classItem.teacher ||
+        classItem.teacher.toString() !== req.account._id.toString())
+    ) {
+      return res.status(403).json({
+        message: "Bạn không phải là giảng viên của lớp này",
+        details: {
+          teacherId: classItem.teacher?.toString(),
+          accountId: req.account._id.toString(),
+        },
+      });
+    }
+
+    // Đặt lại trạng thái thành in_progress
+    attendance.status = "in_progress";
+
+    // Nếu đã có endTime, xóa endTime
+    if (attendance.endTime) {
+      attendance.endTime = null;
+    }
+
+    await attendance.save();
+
+    res.json({
+      message: "Đã đặt lại trạng thái buổi điểm danh thành đang diễn ra",
+      attendance: attendance,
+    });
+  } catch (error) {
+    console.error("Error resetting attendance status:", error);
+    res.status(500).json({
+      message: "Lỗi khi đặt lại trạng thái buổi điểm danh",
+      error: error.message,
+    });
+  }
+});
+
+// POST - Add student to class
+app.post(
+  "/api/teacher/classes/:classId/add-student",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId } = req.params;
+      const { studentId } = req.body;
+
+      // Kiểm tra ID lớp học hợp lệ
+      if (!isValidObjectId(classId)) {
+        return res.status(400).json({
+          message: "ID lớp học không hợp lệ",
+          details: { providedClassId: classId },
+        });
+      }
+
+      // Kiểm tra ID sinh viên hợp lệ
+      if (!isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID sinh viên không hợp lệ",
+          details: { providedStudentId: studentId },
+        });
+      }
+
+      // Kiểm tra lớp học
+      const classItem = await Class.findById(classId);
+      if (!classItem) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp học",
+          details: { classId },
+        });
+      }
+
+      // Kiểm tra quyền
+      if (
+        req.account.role !== "admin" &&
+        (!classItem.teacher ||
+          classItem.teacher.toString() !== req.account._id.toString())
+      ) {
+        return res.status(403).json({
+          message: "Bạn không phải là giảng viên của lớp này",
+          details: {
+            teacherId: classItem.teacher?.toString(),
+            accountId: req.account._id.toString(),
+          },
+        });
+      }
+
+      // Kiểm tra sinh viên
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+          details: { studentId },
+        });
+      }
+
+      // Kiểm tra xem sinh viên đã thuộc lớp học chưa
+      const existingRelation = await ClassStudent.findOne({
+        class: classId,
+        student: studentId,
+      });
+
+      if (existingRelation) {
+        return res.status(400).json({
+          message: "Sinh viên đã thuộc lớp học này",
+          details: {
+            classId,
+            className: classItem.name,
+            studentId,
+            studentName: student.name,
+            studentCode: student.studentId,
+          },
+        });
+      }
+
+      // Tạo mối quan hệ giữa lớp học và sinh viên
+      const classStudent = new ClassStudent({
+        class: classId,
+        student: studentId,
+        joinDate: new Date(),
+        status: "active",
+      });
+
+      await classStudent.save();
+
+      // Cập nhật số lượng sinh viên trong lớp học
+      classItem.studentCount = (classItem.studentCount || 0) + 1;
+      await classItem.save();
+
+      res.status(201).json({
+        message: "Đã thêm sinh viên vào lớp học thành công",
+        classStudent,
+        student: {
+          _id: student._id,
+          name: student.name,
+          studentId: student.studentId,
+        },
+        class: {
+          _id: classItem._id,
+          name: classItem.name,
+          code: classItem.code,
+          studentCount: classItem.studentCount,
+        },
+      });
+    } catch (error) {
+      console.error("Error adding student to class:", error);
+      res.status(500).json({
+        message: "Lỗi khi thêm sinh viên vào lớp học",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// POST - Create attendance session with advanced options
+app.post(
+  "/api/teacher/classes/:classId/create-attendance",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId } = req.params;
+      const {
+        sessionNumber,
+        date,
+        title,
+        description,
+        location,
+        autoCompleteAfter,
+      } = req.body;
+
+      // Kiểm tra ID lớp học hợp lệ
+      if (!isValidObjectId(classId)) {
+        return res.status(400).json({
+          message: "ID lớp học không hợp lệ",
+          details: { providedClassId: classId },
+        });
+      }
+
+      // Kiểm tra lớp học
+      const classItem = await Class.findById(classId);
+      if (!classItem) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp học",
+          details: { classId },
+        });
+      }
+
+      // Kiểm tra quyền
+      if (
+        req.account.role !== "admin" &&
+        (!classItem.teacher ||
+          classItem.teacher.toString() !== req.account._id.toString())
+      ) {
+        return res.status(403).json({
+          message: "Bạn không phải là giảng viên của lớp này",
+          details: {
+            teacherId: classItem.teacher?.toString(),
+            accountId: req.account._id.toString(),
+          },
+        });
+      }
+
+      // Kiểm tra xem đã có buổi điểm danh nào cho số buổi học này chưa
+      const existingSession = await Attendance.findOne({
+        class: classId,
+        sessionNumber: sessionNumber,
+      });
+
+      if (existingSession) {
+        return res.status(400).json({
+          message: "Đã tồn tại buổi điểm danh cho số buổi học này",
+          details: {
+            classId,
+            className: classItem.name,
+            sessionNumber,
+            existingSessionId: existingSession._id,
+          },
+        });
+      }
+
+      // Tạo buổi điểm danh mới
+      const attendance = new Attendance({
+        class: classId,
+        sessionNumber,
+        date: date || new Date(),
+        status: "in_progress",
+        createdBy: req.account._id,
+        startTime: new Date(),
+        title: title || `Buổi ${sessionNumber} - ${classItem.name}`,
+        description: description || "",
+        location: location || classItem.location || "",
+      });
+
+      await attendance.save();
+
+      // Nếu có tùy chọn tự động kết thúc
+      if (autoCompleteAfter && !isNaN(autoCompleteAfter)) {
+        // Lên lịch tự động kết thúc sau số phút đã chỉ định
+        setTimeout(async () => {
+          try {
+            const session = await Attendance.findById(attendance._id);
+            if (session && session.status === "in_progress") {
+              // Kết thúc buổi điểm danh
+              session.status = "completed";
+              session.endTime = new Date();
+              await session.save();
+
+              // Đánh dấu vắng mặt cho các sinh viên chưa điểm danh
+              const classStudents = await ClassStudent.find({ class: classId });
+              const attendedStudents = await AttendanceRecord.find({
+                attendance: attendance._id,
+              });
+
+              const attendedStudentIds = attendedStudents.map((record) =>
+                record.student.toString()
+              );
+              const absentStudentIds = classStudents
+                .map((item) => item.student.toString())
+                .filter((studentId) => !attendedStudentIds.includes(studentId));
+
+              // Tạo bản ghi vắng mặt cho các sinh viên chưa điểm danh
+              if (absentStudentIds.length > 0) {
+                const absentRecords = absentStudentIds.map((studentId) => ({
+                  attendance: attendance._id,
+                  class: classId,
+                  student: studentId,
+                  present: false,
+                  method: "auto",
+                  recordTime: new Date(),
+                }));
+
+                await AttendanceRecord.insertMany(absentRecords);
+              }
+              console.log(
+                `Auto-completed attendance session ${attendance._id} after ${autoCompleteAfter} minutes`
+              );
+            }
+          } catch (error) {
+            console.error("Error in auto-complete attendance:", error);
+          }
+        }, autoCompleteAfter * 60 * 1000); // Chuyển đổi phút thành mili giây
+      }
+
+      res.status(201).json({
+        message: "Đã tạo buổi điểm danh thành công",
+        attendance,
+      });
+    } catch (error) {
+      console.error("Error creating attendance session:", error);
+      res.status(500).json({
+        message: "Lỗi khi tạo buổi điểm danh",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// GET - Search student by student ID (code)
+app.get("/api/teacher/students/search", auth, async (req, res) => {
+  try {
+    const { query, exact } = req.query;
+
+    if (!query || query.trim() === "") {
+      return res.status(400).json({
+        message: "Cần có từ khóa tìm kiếm",
+        details: { providedQuery: query },
+      });
+    }
+
+    let searchCondition;
+
+    // Nếu exact=true, tìm chính xác mã sinh viên
+    if (exact === "true") {
+      searchCondition = { studentId: query.trim() };
+    } else {
+      // Tìm theo regex (mã sinh viên hoặc tên)
+      const searchRegex = new RegExp(query.trim(), "i");
+      searchCondition = {
+        $or: [{ studentId: searchRegex }, { name: searchRegex }],
+      };
+    }
+
+    // Tìm sinh viên
+    const students = await Student.find(searchCondition)
+      .select("_id name studentId email phone avatar department")
+      .limit(10);
+
+    if (students.length === 0) {
+      return res.status(404).json({
+        message: "Không tìm thấy sinh viên",
+        details: { query },
+      });
+    }
+
+    // Nếu tìm với exact=true và chỉ có 1 kết quả, trả về thông tin chi tiết
+    if (exact === "true" && students.length === 1) {
+      const student = students[0];
+
+      // Lấy thông tin các lớp học mà sinh viên đã tham gia
+      const classStudents = await ClassStudent.find({ student: student._id });
+      const classIds = classStudents.map((cs) => cs.class);
+
+      const classes = await Class.find({ _id: { $in: classIds } }).select(
+        "_id name code department"
+      );
+
+      return res.json({
+        student: {
+          ...student.toObject(),
+          classes,
+        },
+      });
+    }
+
+    // Trả về danh sách kết quả tìm kiếm
+    res.json({
+      message: `Tìm thấy ${students.length} sinh viên`,
+      students,
+      query,
+    });
+  } catch (error) {
+    console.error("Error searching students:", error);
+    res.status(500).json({
+      message: "Lỗi khi tìm kiếm sinh viên",
+      error: error.message,
+    });
+  }
+});
+
+// GET - Check if student is in class
+app.get(
+  "/api/teacher/classes/:classId/check-student/:studentId",
+  auth,
+  async (req, res) => {
+    try {
+      const { classId, studentId } = req.params;
+
+      // Kiểm tra ID hợp lệ
+      if (!isValidObjectId(classId) || !isValidObjectId(studentId)) {
+        return res.status(400).json({
+          message: "ID không hợp lệ",
+          details: { classId, studentId },
+        });
+      }
+
+      // Kiểm tra lớp học
+      const classItem = await Class.findById(classId);
+      if (!classItem) {
+        return res.status(404).json({
+          message: "Không tìm thấy lớp học",
+          details: { classId },
+        });
+      }
+
+      // Kiểm tra sinh viên
+      const student = await Student.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          message: "Không tìm thấy sinh viên",
+          details: { studentId },
+        });
+      }
+
+      // Kiểm tra quan hệ
+      const relation = await ClassStudent.findOne({
+        class: classId,
+        student: studentId,
+      });
+
+      if (relation) {
+        // Sinh viên đã trong lớp
+        res.json({
+          isInClass: true,
+          message: "Sinh viên đã thuộc lớp học này",
+          student: {
+            _id: student._id,
+            name: student.name,
+            studentId: student.studentId,
+          },
+          class: {
+            _id: classItem._id,
+            name: classItem.name,
+            code: classItem.code,
+          },
+          relation,
+        });
+      } else {
+        // Sinh viên chưa trong lớp
+        res.json({
+          isInClass: false,
+          message: "Sinh viên chưa thuộc lớp học này",
+          student: {
+            _id: student._id,
+            name: student.name,
+            studentId: student.studentId,
+          },
+          class: {
+            _id: classItem._id,
+            name: classItem.name,
+            code: classItem.code,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Error checking student in class:", error);
+      res.status(500).json({
+        message: "Lỗi khi kiểm tra sinh viên trong lớp học",
+        error: error.message,
+      });
+    }
+  }
+);
+// ==================== ERROR HANDLING ====================
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({
+    message: "Đã xảy ra lỗi",
+    error: err.message,
+  });
+});
+
+// 404 handler - must be the last middleware
+app.use((req, res) => {
+  console.log("404 Not Found:", req.method, req.path);
+  res.status(404).json({
+    message: "Không tìm thấy tài nguyên",
+    path: req.path,
+    method: req.method,
+  });
+});
+
+// Khởi động server
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Health check available at http://localhost:${PORT}/health`);
+  console.log(`Server running on port ${PORT}`);
 });

@@ -16,8 +16,7 @@ const AdminClassManagement = ({ isTeacherView = false }) => {
   const { currentUser, isAdmin } = useAuth();
   const location = useLocation();
   const isTeacherViewMode =
-    isTeacherView ||
-    (!isAdmin() && location.pathname === "/teacher/admin-classes");
+    isTeacherView || (!isAdmin() && location.pathname === "/mainclasses");
 
   const [adminClasses, setAdminClasses] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -474,8 +473,10 @@ const AdminClassManagement = ({ isTeacherView = false }) => {
                       </button>
                       <Link
                         to={`${
-                          isTeacherViewMode ? "/teacher" : "/admin"
-                        }/admin-classes/${adminClass._id}/students`}
+                          isTeacherViewMode
+                            ? "/mainclasses"
+                            : "/admin/admin-classes"
+                        }/${adminClass._id}/students`}
                         className="text-blue-600 hover:text-blue-900 mr-4"
                       >
                         <FaUsers className="inline" /> Sinh viên
